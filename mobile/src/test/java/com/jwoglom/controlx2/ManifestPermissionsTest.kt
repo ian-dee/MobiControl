@@ -52,10 +52,15 @@ class ManifestPermissionsTest {
             "android.permission.USE_FULL_SCREEN_INTENT",
             "android.permission.WAKE_LOCK",
             "android.permission.RECEIVE_BOOT_COMPLETED",
+            "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
             "android.permission.INTERNET",
+            "android.permission.CAMERA", // Carb Capture meal-photo viewfinder
+            "android.permission.ACCESS_NETWORK_STATE", // CameraX/media3 transitive merged manifest
+            "android.permission.USE_BIOMETRIC",
             // Merged in by libraries at every SDK
+            "android.permission.USE_FINGERPRINT", // androidx.biometric legacy compatibility
             "android.permission.BLUETOOTH_ADVERTISE", // blessed-android
-            "com.jwoglom.controlx2.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION", // androidx.core
+            "local.controlx21.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION", // androidx.core
         )
 
         // Only present on API <= 30. BLUETOOTH and BLUETOOTH_ADMIN are

@@ -12,6 +12,9 @@
 /.idea/vcs.xml
 .DS_Store
 **/build
+# Workflow phase contracts intentionally live under harness/build/.
+!/harness/build/
+!/harness/build/**/*.md
 /captures
 .externalNativeBuild
 .cxx
@@ -28,6 +31,11 @@ buildSrc/.kotlin
 buildSrc/build
 .android-sdk/
 .gradle-home/
+.gradle-user-home/
+
+# Raw local pump/device evidence can contain large or sensitive captures. Review
+# and move any durable finding into normal documentation before versioning it.
+/artifacts/
 
 # Roborazzi generated reports/diffs (baselines under src/test/snapshots stay tracked)
 **/src/test/snapshots/**/*.compare.png
@@ -35,3 +43,5 @@ buildSrc/build
 **/src/test/snapshots/**/*.expected.png
 **/src/test/snapshots/**/*.diff.png
 **/src/test/snapshots/**/reports/
+.dependencies/
+.publication-reports/

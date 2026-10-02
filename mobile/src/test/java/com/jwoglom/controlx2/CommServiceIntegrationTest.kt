@@ -1,12 +1,25 @@
 package com.jwoglom.controlx2
 
+import android.app.Notification
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.jwoglom.controlx2.messaging.MessageBusFactory
 import com.jwoglom.controlx2.shared.InitiateConfirmedBolusSerializer
+import com.jwoglom.controlx2.shared.AutomaticBolusCancelOutcome
+import com.jwoglom.controlx2.shared.AutomaticBolusCancelResult
+import com.jwoglom.controlx2.shared.AutomaticBolusIdentity
+import com.jwoglom.controlx2.shared.ManualBolusCancelOutcome
+import com.jwoglom.controlx2.shared.ManualBolusCancelResult
+import com.jwoglom.controlx2.shared.ManualBolusIdentity
+import com.jwoglom.controlx2.shared.QuickBolusCancelOutcome
+import com.jwoglom.controlx2.shared.QuickBolusCancelResult
+import com.jwoglom.controlx2.shared.QuickBolusIdentity
 import com.jwoglom.controlx2.shared.MessagePaths
 import com.jwoglom.controlx2.shared.PumpMessageSerializer
 import com.jwoglom.controlx2.shared.messaging.MessageBusSender
@@ -20,6 +33,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.mockkStatic
+import io.mockk.verify
 import io.mockk.unmockkAll
 import org.junit.After
 import org.junit.Assert.*
@@ -39,6 +53,10 @@ import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ApiVersionRespons
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ControlIQIOBResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBatteryV2Response
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentEGVGuiDataResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBolusStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.TimeSinceResetResponse
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.BolusDeliveryHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.HistoryLogStreamResponse
 import com.welie.blessed.BluetoothPeripheral
 import java.time.Instant
 
@@ -69,6 +87,7 @@ class CommServiceIntegrationTest {
     // this is the Pump inner class instance, typed as TandemPump.
     private var capturedPump: TandemPump? = null
     private val mockPeripheral: BluetoothPeripheral = mockk(relaxed = true)
+    private lateinit var mockBtHandler: TandemBluetoothHandler
 
     @Before
     fun setup() {
@@ -88,7 +107,7 @@ class CommServiceIntegrationTest {
 
         // Mock TandemBluetoothHandler — capture the TandemPump callback
         mockkStatic(TandemBluetoothHandler::class)
-        val mockBtHandler = mockk<TandemBluetoothHandler>(relaxed = true)
+        mockBtHandler = mockk(relaxed = true)
         every { TandemBluetoothHandler.getInstance(any(), any(), any()) } answers {
             capturedPump = secondArg<TandemPump>()
             mockBtHandler
@@ -108,6 +127,7 @@ class CommServiceIntegrationTest {
 
     @After
     fun teardown() {
+        BolusTimeoutReminder(context).cancelSession()
         try {
             serviceController.destroy()
         } catch (_: Exception) {}
@@ -117,6 +137,42 @@ class CommServiceIntegrationTest {
     }
 
     // --- Helpers ---
+
+    @Test
+    fun `developer preview service can stop before message bus initialization`() {
+        prefs.edit().putBoolean("developer-preview-enabled", true).commit()
+
+        serviceController.create()
+        shadowOf(Looper.getMainLooper()).idle()
+        serviceController.destroy()
+    }
+
+    @Test
+    fun `routine connection notification is tap only and reuses root activity`() {
+        startServiceNormal()
+
+        val createNotification = CommService::class.java
+            .getDeclaredMethod("createNotification")
+            .apply { isAccessible = true }
+        val notification = createNotification.invoke(service) as Notification
+
+        assertNull(notification.fullScreenIntent)
+        assertNotNull(notification.contentIntent)
+        val openIntent = shadowOf(notification.contentIntent).savedIntent
+        assertEquals(
+            ComponentName(context, MainActivity::class.java),
+            openIntent.component,
+        )
+        assertEquals(CommService.ACTION_OPEN_CONNECTION_STATUS, openIntent.action)
+        assertTrue(openIntent.flags and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
+        assertTrue(openIntent.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
+
+        val activityInfo = context.packageManager.getActivityInfo(
+            ComponentName(context, MainActivity::class.java),
+            0,
+        )
+        assertEquals(ActivityInfo.LAUNCH_SINGLE_TASK, activityInfo.launchMode)
+    }
 
     /**
      * Create and start the service in normal (pump comm) mode.
@@ -199,6 +255,16 @@ class CommServiceIntegrationTest {
     // =========================================================================
 
     @Test
+    fun service_onTaskRemoved_retainsForegroundPumpService() {
+        startServiceNormal()
+
+        assertFalse(shadowOf(service).isStoppedBySelf)
+        service.onTaskRemoved(null)
+
+        assertFalse("Dismissing the UI must not stop pump communication", shadowOf(service).isStoppedBySelf)
+    }
+
+    @Test
     fun service_onCreate_normalMode_createsPumpCommHandler() {
         startServiceNormal()
         // Service should have registered a message listener on the bus
@@ -212,6 +278,34 @@ class CommServiceIntegrationTest {
         assertFalse(
             "Should NOT send pump-finder-started in normal mode",
             messageBus.hasMessage(MessagePaths.TO_SERVER_PUMP_FINDER_STARTED)
+        )
+        assertTrue(
+            "Disconnected service snapshot must resolve an unknown UI state",
+            messageBus.hasMessageWithData(
+                MessagePaths.FROM_PUMP_PUMP_NOT_CONNECTED,
+                "service_snapshot_disconnected",
+            ),
+        )
+        assertTrue(
+            "Disconnected service snapshot must include current hydration state",
+            messageBus.hasMessage(MessagePaths.TO_CLIENT_PUMP_HYDRATION_STATE),
+        )
+    }
+
+    @Test
+    fun disconnectedPump_eachServiceStatusRequestGetsAuthoritativeSnapshot() {
+        startServiceNormal()
+
+        sendMessage(MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS)
+        sendMessage(MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS)
+
+        assertEquals(
+            2,
+            messageBus.messagesForPath(MessagePaths.FROM_PUMP_PUMP_NOT_CONNECTED).size,
+        )
+        assertEquals(
+            2,
+            messageBus.messagesForPath(MessagePaths.TO_CLIENT_PUMP_HYDRATION_STATE).size,
         )
     }
 
@@ -255,16 +349,111 @@ class CommServiceIntegrationTest {
     }
 
     @Test
-    fun service_onStartCommand_alreadyRunning_noop() {
+    fun service_onStartCommand_alreadyRunning_withoutEstablishedPump_doesNotRearm() {
         startServiceNormal()
         serviceController.startCommand(0, 0)
         shadowOf(Looper.getMainLooper()).idle()
-        // Second start should be ignored (no duplicate init)
         serviceController.startCommand(0, 0)
         shadowOf(Looper.getMainLooper()).idle()
-        // Service should still function normally
+        Thread.sleep(100)
+
+        verify(exactly = 0) { mockBtHandler.ensureConnectionActive(true) }
         sendMessage(MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS)
         assertTrue(messageBus.hasMessage(MessagePaths.TO_SERVER_COMM_STARTED))
+    }
+
+    @Test
+    fun service_onStartCommand_alreadyRunning_withEstablishedPump_rearmsConnectionOnce() {
+        prefs.edit().putInt("current-pump-sid", 68).commit()
+        startServiceNormal()
+        serviceController.startCommand(0, 0)
+        shadowOf(Looper.getMainLooper()).idle()
+        Thread.sleep(100)
+
+        serviceController.startCommand(0, 0)
+        shadowOf(Looper.getMainLooper()).idle()
+        Thread.sleep(100)
+
+        verify(exactly = 1) { mockBtHandler.ensureConnectionActive(true) }
+        sendMessage(MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS)
+        assertTrue(messageBus.hasMessage(MessagePaths.TO_SERVER_COMM_STARTED))
+    }
+
+    @Test
+    fun explicitConnectionCheck_rearmsTransportOnce() {
+        prefs.edit().putInt("current-pump-sid", 68).commit()
+        startServiceNormal()
+        serviceController.startCommand(0, 0)
+        shadowOf(Looper.getMainLooper()).idle()
+        Thread.sleep(100)
+
+        sendMessage(MessagePaths.TO_SERVER_ENSURE_PUMP_CONNECTION)
+        Thread.sleep(100)
+
+        verify(exactly = 1) { mockBtHandler.ensureConnectionActive(true) }
+    }
+
+    @Test
+    fun automaticBolusCancellation_isBlockedWhenInsulinActionsAreDisabled() {
+        startServiceAndConnectPump()
+        prefs.edit().putBoolean("insulin-delivery-actions", false).commit()
+        val identity = AutomaticBolusIdentity(12345, 700_000L, 42)
+
+        sendMessage(MessagePaths.TO_SERVER_CANCEL_AUTOMATIC_BOLUS, identity.encode())
+        repeat(20) {
+            if (messageBus.hasMessage(MessagePaths.TO_CLIENT_AUTOMATIC_BOLUS_CANCEL_RESULT)) {
+                return@repeat
+            }
+            Thread.sleep(25)
+        }
+
+        val result = messageBus.lastMessage(MessagePaths.TO_CLIENT_AUTOMATIC_BOLUS_CANCEL_RESULT)
+            ?.data
+            ?.let(AutomaticBolusCancelResult::decode)
+        assertEquals(AutomaticBolusCancelOutcome.ACTIONS_DISABLED, result?.outcome)
+        assertEquals(identity, result?.identity)
+    }
+
+    @Test
+    fun manualBolusCancellation_isBlockedWhenInsulinActionsAreDisabled() {
+        startServiceAndConnectPump()
+        prefs.edit().putBoolean("insulin-delivery-actions", false).commit()
+        val identity = ManualBolusIdentity(12345, 700_000L, 42)
+
+        sendMessage(MessagePaths.TO_SERVER_CANCEL_MANUAL_BOLUS, identity.encode())
+        repeat(20) {
+            if (messageBus.hasMessage(MessagePaths.TO_CLIENT_MANUAL_BOLUS_CANCEL_RESULT)) {
+                return@repeat
+            }
+            Thread.sleep(25)
+        }
+
+        val result = messageBus.lastMessage(MessagePaths.TO_CLIENT_MANUAL_BOLUS_CANCEL_RESULT)
+            ?.data
+            ?.let(ManualBolusCancelResult::decode)
+        assertEquals(ManualBolusCancelOutcome.ACTIONS_DISABLED, result?.outcome)
+        assertEquals(identity, result?.identity)
+    }
+
+    @Test
+    fun quickBolusCancellation_isBlockedWhenInsulinActionsAreDisabled() {
+        startServiceAndConnectPump()
+        prefs.edit().putBoolean("insulin-delivery-actions", false).commit()
+        val identity = QuickBolusIdentity(12345, 700_000L, 42)
+
+        sendMessage(MessagePaths.TO_SERVER_CANCEL_QUICK_BOLUS, identity.encode())
+        repeat(20) {
+            if (messageBus.hasMessage(MessagePaths.TO_CLIENT_QUICK_BOLUS_CANCEL_RESULT)) {
+                return@repeat
+            }
+            Thread.sleep(25)
+        }
+
+        val result = messageBus.lastMessage(MessagePaths.TO_CLIENT_QUICK_BOLUS_CANCEL_RESULT)
+            ?.data
+            ?.let(QuickBolusCancelResult::decode)
+        assertEquals(QuickBolusCancelOutcome.ACTIONS_DISABLED, result?.outcome)
+        assertEquals(identity, result?.identity)
     }
 
     // =========================================================================
@@ -309,12 +498,12 @@ class CommServiceIntegrationTest {
     }
 
     @Test
-    fun bolus_confirmRequest_phone_createsConfirmation() {
+    fun bolus_authenticatedPhoneRequest_isSignedAndSubmittedWithoutSecondConfirmation() {
         startServiceNormal()
-        // Enable insulin delivery
         prefs.edit().putBoolean("insulin-delivery-actions", true).commit()
-        // Set threshold high so notification is created
         prefs.edit().putLong("bolus-confirmation-insulin-threshold", 0).commit()
+        val unfinishedBolusReminder = BolusTimeoutReminder(context)
+        unfinishedBolusReminder.startSession(sessionId = "authenticated-phone-request")
 
         val bolusRequest = InitiateBolusRequest(1000, 1, 0, 0, 0, 0, 0, 0)
         val msgBytes = PumpMessageSerializer.toBytes(bolusRequest)
@@ -331,10 +520,31 @@ class CommServiceIntegrationTest {
             prefs.getString("initiateBolusSecret", null)
         )
         assertEquals("phone", prefs.getString("initiateBolusSource", null))
+        assertEquals(
+            "The authenticated phone path must emit exactly one signed submission",
+            1,
+            messageBus.messagesForPath(MessagePaths.TO_SERVER_INITIATE_CONFIRMED_BOLUS).size,
+        )
+        assertFalse(
+            "The authenticated phone path must not create a second confirmation dialog",
+            messageBus.hasMessage(MessagePaths.TO_SERVER_BOLUS_CONFIRM_DIALOG),
+        )
+
+        val secret = prefs.getString("initiateBolusSecret", null)!!
+        val signedPayload = messageBus.lastMessage(
+            MessagePaths.TO_SERVER_INITIATE_CONFIRMED_BOLUS,
+        )!!.data
+        val decoded = InitiateConfirmedBolusSerializer.fromBytes(secret, signedPayload)
+        assertTrue("The submitted payload must have a valid one-time signature", decoded.left)
+        assertEquals(bolusRequest, decoded.right)
+        assertNull(
+            "The unfinished-bolus reminder must clear after durable authenticated submission",
+            unfinishedBolusReminder.activeSession(),
+        )
     }
 
     @Test
-    fun bolus_confirmRequest_wear_createsConfirmation() {
+    fun bolus_confirmRequest_wear_isRejectedWhileWatchIntegrationIsDisabled() {
         startServiceNormal()
         prefs.edit().putBoolean("insulin-delivery-actions", true).commit()
         prefs.edit().putLong("bolus-confirmation-insulin-threshold", 0).commit()
@@ -344,10 +554,11 @@ class CommServiceIntegrationTest {
         sendMessage(MessagePaths.TO_SERVER_BOLUS_REQUEST_WEAR, msgBytes)
         shadowOf(Looper.getMainLooper()).idle()
 
-        assertEquals("wear", prefs.getString("initiateBolusSource", null))
-        // Should also broadcast threshold and auto-approve timeout to wear
-        assertTrue(messageBus.hasMessage(MessagePaths.TO_CLIENT_BOLUS_MIN_NOTIFY_THRESHOLD))
-        assertTrue(messageBus.hasMessage(MessagePaths.TO_CLIENT_WEAR_AUTO_APPROVE_TIMEOUT))
+        assertNull("A disabled watch request must not enter the bolus lifecycle", prefs.getString("initiateBolusSource", null))
+        assertNull("A disabled watch request must not stage a bolus", prefs.getString("initiateBolusRequest", null))
+        assertNull("A disabled watch request must not create an authorization secret", prefs.getString("initiateBolusSecret", null))
+        assertFalse(messageBus.hasMessage(MessagePaths.TO_CLIENT_BOLUS_MIN_NOTIFY_THRESHOLD))
+        assertFalse(messageBus.hasMessage(MessagePaths.TO_CLIENT_WEAR_AUTO_APPROVE_TIMEOUT))
     }
 
     @Test
@@ -459,6 +670,29 @@ class CommServiceIntegrationTest {
     }
 
     @Test
+    fun disconnectedBulkRead_coalescesNotConnectedSignal_andOnlyRearmsTransport() {
+        startServiceNormal()
+        serviceController.startCommand(0, 0)
+        shadowOf(Looper.getMainLooper()).idle()
+        Thread.sleep(200)
+        messageBus.clear()
+
+        val bulkBytes = PumpMessageSerializer.toBulkBytes(
+            listOf(ApiVersionRequest(), ControlIQIOBRequest()),
+        )
+        sendMessage(MessagePaths.TO_PUMP_COMMANDS, bulkBytes)
+        Thread.sleep(200)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(
+            "One disconnected bulk read should publish one coalesced status signal",
+            1,
+            messageBus.messagesForPath(MessagePaths.FROM_PUMP_PUMP_NOT_CONNECTED).size,
+        )
+        verify(atLeast = 1) { mockBtHandler.ensureConnectionActive(false) }
+    }
+
+    @Test
     fun lifecycle_pumpReadyForHistoryFetch_whenNoSession_returnsFalse() {
         startServiceNormal()
         assertFalse(
@@ -517,22 +751,23 @@ class CommServiceIntegrationTest {
     }
 
     @Test
-    fun bolus_confirmRequest_belowThreshold_autoApproves() {
+    fun bolus_authenticatedPhoneRequest_ignoresLegacyNotificationThreshold() {
         startServiceNormal()
         prefs.edit().putBoolean("insulin-delivery-actions", true).commit()
-        // Set threshold above the bolus amount (1u = 1000 milliunits)
-        // Threshold in prefs is stored via InsulinUnit.from1To1000
         val thresholdMilliunits = InsulinUnit.from1To1000(5.0) // 5 units threshold
         prefs.edit().putLong("bolus-confirmation-insulin-threshold", thresholdMilliunits.toLong()).commit()
 
-        // Request a small bolus (0.5u = 500 milliunits) - below 5u threshold
         val bolusRequest = InitiateBolusRequest(500, 1, 0, 0, 0, 0, 0, 0)
         val msgBytes = PumpMessageSerializer.toBytes(bolusRequest)
         sendMessage(MessagePaths.TO_SERVER_BOLUS_REQUEST_PHONE, msgBytes)
         shadowOf(Looper.getMainLooper()).idle()
 
-        // Bolus prefs should still be set (for the auto-approve flow)
         assertNotNull(prefs.getString("initiateBolusSecret", null))
+        assertEquals(
+            1,
+            messageBus.messagesForPath(MessagePaths.TO_SERVER_INITIATE_CONFIRMED_BOLUS).size,
+        )
+        assertFalse(messageBus.hasMessage(MessagePaths.TO_SERVER_BOLUS_CONFIRM_DIALOG))
     }
 
     // =========================================================================
@@ -567,6 +802,23 @@ class CommServiceIntegrationTest {
         assertTrue(
             "Expected /from-pump/pump-connected when pump is connected",
             messageBus.hasMessage(MessagePaths.FROM_PUMP_PUMP_CONNECTED)
+        )
+    }
+
+    @Test
+    fun connectedPump_serviceStatusRepublishesConnectionForRecreatedUi() {
+        startServiceAndConnectPump()
+
+        sendMessage(MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertTrue(
+            "Expected service status response",
+            messageBus.hasMessage(MessagePaths.TO_SERVER_COMM_STARTED),
+        )
+        assertTrue(
+            "Expected active pump connection to be republished",
+            messageBus.hasMessage(MessagePaths.FROM_PUMP_PUMP_CONNECTED),
         )
     }
 
@@ -791,6 +1043,79 @@ class CommServiceIntegrationTest {
             "onReceiveMessage should populate the response cache",
             cache.containsKey(key)
         )
+    }
+
+    @Test
+    fun connectedPump_quickBolusStatusCreatesPumpIssuedLifecycleWithoutPhonePermission() {
+        startServiceAndConnectPump()
+        capturedPump!!.onReceiveMessage(
+            mockPeripheral,
+            TimeSinceResetResponse(700_100L, 100L),
+        )
+        capturedPump!!.onReceiveMessage(
+            mockPeripheral,
+            CurrentBolusStatusResponse(
+                CurrentBolusStatusResponse.CurrentBolusStatus.DELIVERING.id,
+                7_743,
+                700_105L,
+                500L,
+                BolusDeliveryHistoryLog.BolusSource.QUICK_BOLUS.id(),
+                1,
+            ),
+        )
+        repeat(20) {
+            if (Prefs(context).quickBolusOperation() != null) return@repeat
+            Thread.sleep(25)
+        }
+
+        val operation = Prefs(context).quickBolusOperation()
+        assertEquals(7_743, operation?.identity?.bolusId)
+        assertEquals(500L, operation?.requestedMilliunits)
+        assertNull(Prefs(context).manualBolusOperation())
+        assertNull(Prefs(context).bolusPermissionOperation())
+        assertTrue(messageBus.hasMessage(MessagePaths.TO_CLIENT_QUICK_BOLUS_OPERATION))
+        assertTrue(BolusStatusPolling.isRunning())
+
+        capturedPump!!.onReceiveMessage(
+            mockPeripheral,
+            CurrentBolusStatusResponse(
+                CurrentBolusStatusResponse.CurrentBolusStatus.ALREADY_DELIVERED_OR_INVALID.id,
+                0,
+                0L,
+                0L,
+                BolusDeliveryHistoryLog.BolusSource.QUICK_BOLUS.id(),
+                1,
+            ),
+        )
+        assertTrue(
+            "Polling must continue while Last Bolus/history terminal evidence is still unresolved",
+            BolusStatusPolling.isRunning(),
+        )
+
+        val terminal = BolusDeliveryHistoryLog(
+            700_110L,
+            10_001L,
+            7_743,
+            2,
+            setOf(BolusDeliveryHistoryLog.BolusType.FOOD2),
+            BolusDeliveryHistoryLog.BolusSource.QUICK_BOLUS,
+            0,
+            500,
+            0,
+            0,
+            0,
+            500,
+        )
+        capturedPump!!.onReceiveMessage(
+            mockPeripheral,
+            HistoryLogStreamResponse(1, 1, listOf(terminal.cargo)),
+        )
+        repeat(20) {
+            if (Prefs(context).quickBolusOperation()?.isUnresolved == false) return@repeat
+            Thread.sleep(25)
+        }
+        assertFalse(Prefs(context).quickBolusOperation()?.isUnresolved ?: true)
+        assertFalse(BolusStatusPolling.isRunning())
     }
 
     // =========================================================================

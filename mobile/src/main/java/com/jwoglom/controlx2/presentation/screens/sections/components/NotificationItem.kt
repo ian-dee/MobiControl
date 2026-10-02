@@ -4,7 +4,6 @@ package com.jwoglom.controlx2.presentation.screens.sections.components
 
 import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,104 +22,52 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.jwoglom.controlx2.shared.util.SendType
-import com.jwoglom.pumpx2.pump.messages.Message
-import com.jwoglom.pumpx2.pump.messages.request.control.DismissNotificationRequest
+import com.jwoglom.controlx2.shared.pumpReminderPresentation
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlarmStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlertStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CGMAlertStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.HighestAamResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ReminderStatusResponse
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 
 val requiredProgress = 0.5f
 
 @Composable
 fun NotificationItem(
     notification: Any,
-    sendPumpCommands: (SendType, List<Message>) -> Unit,
-    refresh: () -> Job
+    dismissalPending: Boolean,
+    onDismiss: (Any) -> Boolean,
 ) {
-    val refreshScope = rememberCoroutineScope()
     val context = LocalContext.current
+    val cgmPresentation = (notification as? CGMAlertStatusResponse.CGMAlert)
+        ?.let(::cgmAlertPresentation)
+    val alertPresentation = (notification as? AlertStatusResponse.AlertResponseType)
+        ?.let(::alertPresentation)
+    val reminderPresentation = (notification as? ReminderStatusResponse.ReminderType)
+        ?.let(::pumpReminderPresentation)
 
     val canDismiss = notification is AlertStatusResponse.AlertResponseType ||
             notification is ReminderStatusResponse.ReminderType ||
             notification is AlarmStatusResponse.AlarmResponseType ||
             notification is CGMAlertStatusResponse.CGMAlert
 
-    fun dismissNotification() {
-        refreshScope.launch {
-            when (notification) {
-                is AlertStatusResponse.AlertResponseType -> {
-                    sendPumpCommands(
-                        SendType.STANDARD, listOf(
-                            DismissNotificationRequest(
-                                DismissNotificationRequest.NotificationType.ALERT,
-                                notification.bitmask().toLong()
-                            )
-                        )
-                    )
-                }
-
-                is ReminderStatusResponse.ReminderType -> {
-                    sendPumpCommands(
-                        SendType.STANDARD, listOf(
-                            DismissNotificationRequest(
-                                DismissNotificationRequest.NotificationType.REMINDER,
-                                notification.id().toLong()
-                            )
-                        )
-                    )
-                }
-
-                is AlarmStatusResponse.AlarmResponseType -> {
-                    sendPumpCommands(
-                        SendType.STANDARD, listOf(
-                            DismissNotificationRequest(
-                                DismissNotificationRequest.NotificationType.ALARM,
-                                notification.bitmask().toLong()
-                            )
-                        )
-                    )
-                }
-
-                is CGMAlertStatusResponse.CGMAlert -> {
-                    sendPumpCommands(
-                        SendType.STANDARD, listOf(
-                            DismissNotificationRequest(
-                                DismissNotificationRequest.NotificationType.CGM_ALERT,
-                                notification.id().toLong()
-                            )
-                        )
-                    )
-                }
-            }
-
-            delay(500)
-            refresh()
-        }
-    }
-
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = {
             when (it) {
                 SwipeToDismissBoxValue.StartToEnd, SwipeToDismissBoxValue.EndToStart -> {
-                    dismissNotification()
-                    Toast.makeText(context, "Dismissing notification", Toast.LENGTH_SHORT).show()
+                    if (canDismiss && !dismissalPending && onDismiss(notification)) {
+                        Toast.makeText(context, "Dismissing notification", Toast.LENGTH_SHORT).show()
+                    }
                 }
                 SwipeToDismissBoxValue.Settled -> return@rememberSwipeToDismissBoxState false
             }
-            return@rememberSwipeToDismissBoxState true
+            // A swipe is an action trigger, not optimistic deletion. Keep the row present until
+            // the pump accepts the request and a status refresh removes it.
+            return@rememberSwipeToDismissBoxState false
         },
         positionalThreshold = { it * requiredProgress }
     )
@@ -128,15 +75,17 @@ fun NotificationItem(
     SwipeToDismissBox(
         state = dismissState,
         backgroundContent = { DismissBackground(dismissState)},
+        enableDismissFromStartToEnd = canDismiss && !dismissalPending,
+        enableDismissFromEndToStart = canDismiss && !dismissalPending,
         content = {
             ListItem(
                 headlineContent = {
                     Text(
                         when (notification) {
-                            is AlertStatusResponse.AlertResponseType -> "Alert: ${notification.name}"
-                            is ReminderStatusResponse.ReminderType -> "Reminder: ${notification.name}"
+                            is AlertStatusResponse.AlertResponseType -> alertPresentation!!.headline
+                            is ReminderStatusResponse.ReminderType -> reminderPresentation!!.headline
                             is AlarmStatusResponse.AlarmResponseType -> "Alarm: ${notification.name}"
-                            is CGMAlertStatusResponse.CGMAlert -> "CGM Alert: ${notification.name}"
+                            is CGMAlertStatusResponse.CGMAlert -> cgmPresentation!!.headline
                             is HighestAamResponse -> "MALFUNCTION: ${notification.errorString}"
                             else -> "$notification"
                         }
@@ -144,13 +93,21 @@ fun NotificationItem(
                 },
                 supportingContent = {
                     when (notification) {
-                        is AlertStatusResponse.AlertResponseType -> Text(
-                            notification.description ?: ""
-                        )
+                        is AlertStatusResponse.AlertResponseType -> alertPresentation
+                            ?.supportingText
+                            ?.let { Text(it) }
 
                         is AlarmStatusResponse.AlarmResponseType -> Text(
                             notification.description ?: ""
                         )
+
+                        is ReminderStatusResponse.ReminderType -> Text(
+                            reminderPresentation!!.supportingText
+                        )
+
+                        is CGMAlertStatusResponse.CGMAlert -> cgmPresentation
+                            ?.supportingText
+                            ?.let { Text(it) }
 
                         is HighestAamResponse -> Text("This alert cannot be cleared and DIY app developers cannot assist you with this problem.\nFor further instructions please contact Tandem technical support and reference the above code.")
                         else -> {}

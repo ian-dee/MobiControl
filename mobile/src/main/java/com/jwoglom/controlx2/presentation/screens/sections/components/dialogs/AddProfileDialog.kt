@@ -3,6 +3,7 @@
 package com.jwoglom.controlx2.presentation.screens.sections.components.dialogs
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -10,6 +11,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -18,12 +20,17 @@ import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.jwoglom.controlx2.LocalDataStore
+import com.jwoglom.controlx2.presentation.screens.sections.basalRateToPumpValue
+import com.jwoglom.controlx2.presentation.screens.sections.CONTROL_IQ_FIXED_INSULIN_DURATION_MINUTES
+import com.jwoglom.controlx2.presentation.screens.sections.profileRatioToPumpValue
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
 import com.jwoglom.controlx2.shared.enums.GlucoseUnit
 import com.jwoglom.controlx2.shared.util.GlucoseConverter
@@ -36,6 +43,7 @@ fun AddProfileDialog(
 ) {
     val dataStore = LocalDataStore.current
     val glucoseUnit by dataStore.glucoseUnitPreference.observeAsState(GlucoseUnit.MGDL)
+    val controlIqEnabled by dataStore.controlIQEnabled.observeAsState(false)
     val unitAbbrev = glucoseUnit.abbreviation
 
     var profileName by remember { mutableStateOf("") }
@@ -49,8 +57,10 @@ fun AddProfileDialog(
         GlucoseUnit.MGDL -> "50"
         GlucoseUnit.MMOL -> "2.8"
     }) }
-    var insulinDuration by remember { mutableStateOf("240") }
+    var insulinDuration by remember { mutableStateOf("300") }
     var carbEntryEnabled by remember { mutableStateOf(true) }
+    var showTurnOffControlIqPrompt by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -67,7 +77,10 @@ fun AddProfileDialog(
                 item {
                     OutlinedTextField(
                         value = profileName,
-                        onValueChange = { profileName = it },
+                        onValueChange = {
+                            profileName = it
+                            errorMessage = ""
+                        },
                         label = { Text("Profile Name") },
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -85,7 +98,7 @@ fun AddProfileDialog(
                         onValueChange = { carbRatio = it },
                         label = { Text("Carb Ratio (g/u)") },
                         supportingText = { Text("Example: 10 = 1:10 ratio") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -104,11 +117,16 @@ fun AddProfileDialog(
                         value = targetBG,
                         onValueChange = { targetBG = it },
                         label = { Text("Target BG ($unitAbbrev)") },
-                        supportingText = { Text(when (glucoseUnit) {
-                            GlucoseUnit.MGDL -> "Example: 110"
-                            GlucoseUnit.MMOL -> "Example: 6.1"
-                        }) },
+                        supportingText = if (controlIqEnabled) {
+                            { Text("Fixed at 110 mg/dL while Control-IQ is enabled") }
+                        } else {
+                            { Text(when (glucoseUnit) {
+                                GlucoseUnit.MGDL -> "Example: 110"
+                                GlucoseUnit.MMOL -> "Example: 6.1"
+                            }) }
+                        },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        enabled = !controlIqEnabled,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -130,40 +148,109 @@ fun AddProfileDialog(
                 item {
                     OutlinedTextField(
                         value = insulinDuration,
-                        onValueChange = { insulinDuration = it },
+                        onValueChange = {
+                            if (!controlIqEnabled) insulinDuration = it
+                        },
                         label = { Text("Insulin Duration (minutes)") },
-                        supportingText = { Text("Example: 240 = 4 hours") },
+                        supportingText = {
+                            Text(
+                                if (controlIqEnabled) {
+                                    "Fixed at 5 hours while Control-IQ is on"
+                                } else {
+                                    "120–480 minutes (2–8 hours)"
+                                },
+                            )
+                        },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        enabled = !controlIqEnabled,
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("Carbohydrate entry")
+                        Switch(
+                            checked = carbEntryEnabled,
+                            onCheckedChange = { requested ->
+                                if (controlIqEnabled && !requested) {
+                                    showTurnOffControlIqPrompt = true
+                                } else {
+                                    carbEntryEnabled = requested
+                                }
+                            },
+                        )
+                    }
+                }
+                if (controlIqEnabled) {
+                    item {
+                        Text(
+                            "Control-IQ requires Carbohydrates to remain on. Tap the toggle for details.",
+                        )
+                    }
+                }
+                if (errorMessage.isNotBlank()) {
+                    item {
+                        Text(errorMessage, color = Color.Red)
+                    }
                 }
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
-                    val carbRatioInt = (carbRatio.toFloatOrNull() ?: 10f) * 1000
-                    val basalRateMilliunits = ((basalRate.toFloatOrNull() ?: 1.0f) * 1000).toInt()
+                    val normalizedName = profileName.trim()
+                    if (normalizedName.isBlank() || normalizedName.toByteArray().size > 16) {
+                        errorMessage = "Profile name must contain 1–16 bytes."
+                        return@TextButton
+                    }
+                    val carbRatioMilliunits = profileRatioToPumpValue(carbRatio)
+                    if (carbRatioMilliunits == null || carbRatioMilliunits > Int.MAX_VALUE) {
+                        errorMessage = "Enter a carb ratio greater than 0 using no more than three decimal places."
+                        return@TextButton
+                    }
+                    val basalRateMilliunits = basalRateToPumpValue(basalRate)
+                    if (basalRateMilliunits == null) {
+                        errorMessage = "Enter a basal rate greater than 0 using no more than three decimal places."
+                        return@TextButton
+                    }
                     // Convert glucose values from display unit to mg/dL for pump
                     val targetBGMgdl = when (glucoseUnit) {
-                        GlucoseUnit.MGDL -> targetBG.toIntOrNull() ?: 110
-                        GlucoseUnit.MMOL -> GlucoseConverter.convert(
-                            targetBG.toDoubleOrNull() ?: 6.1,
-                            GlucoseUnit.MMOL, GlucoseUnit.MGDL
-                        ).roundToInt()
+                        GlucoseUnit.MGDL -> targetBG.toIntOrNull()
+                        GlucoseUnit.MMOL -> targetBG.toDoubleOrNull()?.let {
+                            GlucoseConverter.convert(it, GlucoseUnit.MMOL, GlucoseUnit.MGDL).roundToInt()
+                        }
                     }
                     val isfMgdl = when (glucoseUnit) {
-                        GlucoseUnit.MGDL -> isf.toIntOrNull() ?: 50
-                        GlucoseUnit.MMOL -> GlucoseConverter.convert(
-                            isf.toDoubleOrNull() ?: 2.8,
-                            GlucoseUnit.MMOL, GlucoseUnit.MGDL
-                        ).roundToInt()
+                        GlucoseUnit.MGDL -> isf.toIntOrNull()
+                        GlucoseUnit.MMOL -> isf.toDoubleOrNull()?.let {
+                            GlucoseConverter.convert(it, GlucoseUnit.MMOL, GlucoseUnit.MGDL).roundToInt()
+                        }
                     }
-                    val insulinDurationInt = insulinDuration.toIntOrNull() ?: 240
+                    val insulinDurationInt = if (controlIqEnabled) {
+                        CONTROL_IQ_FIXED_INSULIN_DURATION_MINUTES
+                    } else {
+                        insulinDuration.toIntOrNull()
+                    }
+                    if (targetBGMgdl == null || targetBGMgdl <= 0) {
+                        errorMessage = "Enter a valid Target BG."
+                        return@TextButton
+                    }
+                    if (isfMgdl == null || isfMgdl <= 0) {
+                        errorMessage = "Enter a valid insulin sensitivity factor."
+                        return@TextButton
+                    }
+                    if (insulinDurationInt == null || insulinDurationInt !in 120..480) {
+                        errorMessage = "Insulin duration must be between 120 and 480 minutes."
+                        return@TextButton
+                    }
 
                     onConfirm(
-                        profileName,
-                        carbRatioInt.toInt(),
+                        normalizedName,
+                        carbRatioMilliunits.toInt(),
                         basalRateMilliunits,
                         targetBGMgdl,
                         isfMgdl,
@@ -184,6 +271,24 @@ fun AddProfileDialog(
             }
         }
     )
+
+    if (showTurnOffControlIqPrompt) {
+        AlertDialog(
+            onDismissRequest = { showTurnOffControlIqPrompt = false },
+            title = { Text("Turn Off Control-IQ First") },
+            text = {
+                Text(
+                    "Control-IQ requires Carbohydrates to remain on. " +
+                        "Turn off Control-IQ before changing this setting to off.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showTurnOffControlIqPrompt = false }) {
+                    Text("OK")
+                }
+            },
+        )
+    }
 }
 
 @Preview(showBackground = true, name = "Add Profile Dialog")

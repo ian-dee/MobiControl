@@ -11,9 +11,7 @@ import java.time.Instant
 data class XdripDeviceStatusPayload(
     val createdAt: String,
     val uploaderBattery: Int?,
-    val pump: Pump,
-    val cgm: Cgm,
-    val controlx2ReceivedAt: ControlX2ReceivedAt
+    val pump: Pump
 ) {
     data class Pump(
         val batteryPercent: Int?,
@@ -22,35 +20,15 @@ data class XdripDeviceStatusPayload(
         val basalUnitsPerHour: Double?
     )
 
-    data class Cgm(
-        val sgv: Int?
-    )
-
-    data class ControlX2ReceivedAt(
-        val battery: String?,
-        val iob: String?,
-        val reservoir: String?,
-        val basal: String?,
-        val sgv: String?
-    )
-
     fun toJsonString(): String {
         return JSONObject().apply {
             put("created_at", createdAt)
-            put("uploaderBattery", uploaderBattery)
+            uploaderBattery?.let { put("uploaderBattery", it) }
             put("pump", JSONObject().apply {
                 put("battery", JSONObject().apply { put("percent", pump.batteryPercent) })
                 put("iob", JSONObject().apply { put("bolusiob", pump.bolusIobUnits) })
                 put("reservoir", pump.reservoirUnits)
                 put("basal", pump.basalUnitsPerHour)
-            })
-            put("cgm", JSONObject().apply { put("sgv", cgm.sgv) })
-            put("controlx2ReceivedAt", JSONObject().apply {
-                put("battery", controlx2ReceivedAt.battery)
-                put("iob", controlx2ReceivedAt.iob)
-                put("reservoir", controlx2ReceivedAt.reservoir)
-                put("basal", controlx2ReceivedAt.basal)
-                put("sgv", controlx2ReceivedAt.sgv)
             })
         }.toString()
     }
@@ -69,8 +47,7 @@ internal data class XdripDeviceStatusSnapshot(
     var batteryPercent: XdripTimedValue<Int>? = null,
     var iobUnits: XdripTimedValue<Double>? = null,
     var cartridgeUnits: XdripTimedValue<Int>? = null,
-    var basalUnitsPerHour: XdripTimedValue<Double>? = null,
-    var sgvMgdl: XdripTimedValue<Int>? = null,
+    var basalUnitsPerHour: XdripTimedValue<Double>? = null
 ) {
     fun applyBatteryResponse(response: CurrentBatteryAbstractResponse, receivedAt: Instant) {
         batteryPercent = XdripTimedValue(response.batteryPercent, receivedAt)
@@ -88,27 +65,15 @@ internal data class XdripDeviceStatusSnapshot(
         basalUnitsPerHour = XdripTimedValue(InsulinUnit.from1000To1(response.currentBasalRate), receivedAt)
     }
 
-    fun applySgvValue(mgdl: Int, receivedAt: Instant) {
-        sgvMgdl = XdripTimedValue(mgdl, receivedAt)
-    }
-
-    fun toPayload(createdAt: Instant): XdripDeviceStatusPayload {
+    fun toPayload(createdAt: Instant, uploaderBatteryPercent: Int?): XdripDeviceStatusPayload {
         return XdripDeviceStatusPayload(
             createdAt = createdAt.toString(),
-            uploaderBattery = batteryPercent?.value,
+            uploaderBattery = uploaderBatteryPercent,
             pump = XdripDeviceStatusPayload.Pump(
                 batteryPercent = batteryPercent?.value,
                 bolusIobUnits = iobUnits?.value,
                 reservoirUnits = cartridgeUnits?.value,
                 basalUnitsPerHour = basalUnitsPerHour?.value
-            ),
-            cgm = XdripDeviceStatusPayload.Cgm(sgv = sgvMgdl?.value),
-            controlx2ReceivedAt = XdripDeviceStatusPayload.ControlX2ReceivedAt(
-                battery = batteryPercent?.receivedAt?.toString(),
-                iob = iobUnits?.receivedAt?.toString(),
-                reservoir = cartridgeUnits?.receivedAt?.toString(),
-                basal = basalUnitsPerHour?.receivedAt?.toString(),
-                sgv = sgvMgdl?.receivedAt?.toString()
             )
         )
     }

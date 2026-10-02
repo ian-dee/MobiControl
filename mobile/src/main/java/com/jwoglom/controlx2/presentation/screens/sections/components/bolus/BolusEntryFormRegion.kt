@@ -8,10 +8,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import com.jwoglom.controlx2.LocalDataStore
 import com.jwoglom.controlx2.presentation.screens.sections.components.DecimalOutlinedText
 import com.jwoglom.controlx2.presentation.screens.sections.components.IntegerOutlinedText
+import com.jwoglom.controlx2.shared.enums.GlucoseUnit
 
 data class BolusEntrySnapshot(
     val unitsValue: String?,
@@ -24,13 +26,22 @@ fun BolusEntryFormRegion(
     unitsSubtitle: String,
     carbsSubtitle: String,
     glucoseSubtitle: String,
+    glucoseUnit: GlucoseUnit,
+    carbEntryEnabled: Boolean,
     onUnitsChanged: (String) -> Unit,
     onUnitsFocusChanged: (Boolean) -> Unit,
     onCarbsChanged: (String) -> Unit,
     onGlucoseChanged: (String) -> Unit,
-    onSubmitRequested: () -> Unit,
+    onGlucoseSubmitRequested: () -> Unit,
 ) {
     val dataStore = LocalDataStore.current
+    val focusManager = LocalFocusManager.current
+    val finishEditing = {
+        // The keyboard action only ends text entry. Bolus authorization is deliberately
+        // reachable solely from the visible delivery action after the user reviews the
+        // complete calculation.
+        focusManager.clearFocus(force = true)
+    }
     val snapshot = BolusEntrySnapshot(
         unitsValue = dataStore.bolusUnitsRawValue.observeAsState().value,
         carbsValue = dataStore.bolusCarbsRawValue.observeAsState().value,
@@ -44,7 +55,7 @@ fun BolusEntryFormRegion(
                 title = unitsSubtitle,
                 value = snapshot.unitsValue,
                 onValueChange = onUnitsChanged,
-                onSubmitRequested = onSubmitRequested,
+                onSubmitRequested = finishEditing,
                 modifier = Modifier.onFocusChanged { onUnitsFocusChanged(it.isFocused) }
             )
         }
@@ -52,17 +63,19 @@ fun BolusEntryFormRegion(
     }
 
     Row(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            Modifier
-                .weight(1f)
-                .padding(all = 8.dp)
-        ) {
-            IntegerOutlinedText(
-                title = carbsSubtitle,
-                value = snapshot.carbsValue,
-                onValueChange = onCarbsChanged,
-                onSubmitRequested = onSubmitRequested
-            )
+        if (carbEntryEnabled) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(all = 8.dp)
+            ) {
+                IntegerOutlinedText(
+                    title = carbsSubtitle,
+                    value = snapshot.carbsValue,
+                    onValueChange = onCarbsChanged,
+                    onSubmitRequested = finishEditing
+                )
+            }
         }
 
         Column(
@@ -70,12 +83,26 @@ fun BolusEntryFormRegion(
                 .weight(1f)
                 .padding(all = 8.dp)
         ) {
-            IntegerOutlinedText(
-                title = glucoseSubtitle,
-                value = snapshot.glucoseValue,
-                onValueChange = onGlucoseChanged,
-                onSubmitRequested = onSubmitRequested
-            )
+            when (glucoseUnit) {
+                GlucoseUnit.MGDL -> IntegerOutlinedText(
+                    title = glucoseSubtitle,
+                    value = snapshot.glucoseValue,
+                    onValueChange = onGlucoseChanged,
+                    onSubmitRequested = {
+                        finishEditing()
+                        onGlucoseSubmitRequested()
+                    }
+                )
+                GlucoseUnit.MMOL -> DecimalOutlinedText(
+                    title = glucoseSubtitle,
+                    value = snapshot.glucoseValue,
+                    onValueChange = onGlucoseChanged,
+                    onSubmitRequested = {
+                        finishEditing()
+                        onGlucoseSubmitRequested()
+                    }
+                )
+            }
         }
     }
 }

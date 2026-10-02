@@ -44,6 +44,7 @@ import com.jwoglom.controlx2.presentation.components.Line
 import com.jwoglom.controlx2.presentation.components.ServiceDisabledMessage
 import com.jwoglom.controlx2.presentation.navigation.Screen
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
+import com.jwoglom.controlx2.shared.IntegrationGates
 import com.jwoglom.controlx2.shared.MessagePaths
 import com.jwoglom.controlx2.shared.enums.GlucoseUnit
 import com.jwoglom.controlx2.shared.util.twoDecimalPlaces
@@ -65,7 +66,6 @@ fun AppSetup(
     var bolusConfirmationInsulinThreshold by remember { mutableStateOf(Prefs(context).bolusConfirmationInsulinThreshold()) }
     var wearAutoApproveTimeout by remember { mutableStateOf(Prefs(context).wearBolusAutoApproveTimeoutSeconds()) }
     var checkForUpdates by remember { mutableStateOf(Prefs(context).checkForUpdates()) }
-    var autoFetchHistoryLogs by remember { mutableStateOf(Prefs(context).autoFetchHistoryLogs()) }
     var glucoseUnit by remember { mutableStateOf(Prefs(context).glucoseUnit()) }
 
     var showGlucoseUnitDialog by remember { mutableStateOf(false) }
@@ -90,7 +90,6 @@ fun AppSetup(
             Button(
                 onClick = {
                     Prefs(context).setAppSetupComplete(true)
-                    sendMessage(MessagePaths.TO_SERVER_REFRESH_HISTORY_LOG_SYNC, "".toByteArray())
                     // Do not restart the app at the end of setup; restarting here can race pump
                     // bootstrap and leave CommService in a null-peripheral startup loop.
                     sendMessage(MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS, "".toByteArray())
@@ -150,7 +149,7 @@ fun AppSetup(
                     Text("Insulin Delivery Actions")
                 },
                 supportingContent = {
-                    Text("Allow remote boluses from your phone or watch.")
+                    Text("Allow boluses from this phone.")
                 },
                 trailingContent = {
                     Switch(
@@ -218,7 +217,7 @@ fun AppSetup(
             }
         }
         item {
-            if (insulinDeliveryActions || preview) {
+            if (IntegrationGates.WATCH_INTEGRATION_ENABLED && (insulinDeliveryActions || preview)) {
                 ListItem(
                     headlineContent = {
                         Text("Wear Auto-Approve Timeout")
@@ -255,7 +254,7 @@ fun AppSetup(
                     Text("Check for Updates")
                 },
                 supportingContent = {
-                    Text("Automatically check for ControlX2 updates")
+                    Text("Automatically check for upstream ControlX2 updates")
                 },
                 trailingContent = {
                     Switch(
@@ -277,30 +276,6 @@ fun AppSetup(
                         checkForUpdates = true
                         Prefs(context).setCheckForUpdates(true)
                     }
-                }
-            )
-            Divider()
-        }
-        item {
-            ListItem(
-                headlineContent = {
-                    Text("Auto Fetch History Logs")
-                },
-                supportingContent = {
-                    Text("Fetching history logs allows for rendering a CGM graph on the dashboard screen.")
-                },
-                trailingContent = {
-                    Switch(
-                        checked = autoFetchHistoryLogs,
-                        onCheckedChange = {
-                            autoFetchHistoryLogs = it
-                            Prefs(context).setAutoFetchHistoryLogs(it)
-                        }
-                    )
-                },
-                modifier = Modifier.clickable {
-                    autoFetchHistoryLogs = !autoFetchHistoryLogs
-                    Prefs(context).setAutoFetchHistoryLogs(autoFetchHistoryLogs)
                 }
             )
             Divider()
@@ -408,7 +383,7 @@ fun AppSetup(
             onDismissRequest = { showUpdatesWarningDialog = false },
             title = { Text("Disable Update Checks") },
             text = {
-                Text("Please regularly check the ControlX2 GitHub page and subscribe to release notifications to ensure you stay up to date. Warning: by disabling this option, you will not be alerted to any new feature, security, or safety updates.")
+                Text("Please regularly check the upstream ControlX2 GitHub page and subscribe to release notifications to ensure you stay up to date. Warning: by disabling this option, you will not be alerted to any new feature, security, or safety updates.")
             },
             confirmButton = {
                 Button(onClick = {

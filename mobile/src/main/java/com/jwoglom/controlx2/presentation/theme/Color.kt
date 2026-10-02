@@ -1,6 +1,5 @@
 package com.jwoglom.controlx2.presentation.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -35,10 +34,23 @@ object GlucoseColors {
     val High = Color(0xFFE65100)          // Deep Orange (> 250 mg/dL)
 }
 
+/** Dashboard CGM dot palette used by the app-local Graph Display thresholds. */
+object GraphGlucoseDotColors {
+    val InRangeFill = Color(0xFFD0F8C7)
+    val InRangeOutline = Color(0xFF2E7D32)
+    val HighFill = Color(0xFFFFE0B2)
+    val HighOutline = Color(0xFFF57C00)
+    val LowFill = Color(0xFFFFCDD2)
+    val LowOutline = Color(0xFFD32F2F)
+}
+
 // Insulin Colors
 object InsulinColors {
     val Bolus = Color(0xFF5E35B1)         // Purple
+    val ManualBolus = Color(0xFF1976D2)   // Blue
+    val ManualBolusOutline = Color(0xFF0D47A1) // Deep Blue
     val AutoBolus = Color(0xFF7E57C2)     // Light Purple
+    val AutoBolusOutline = Color(0xFF4527A0) // Deep Purple
     val Basal = Color(0xFF1565C0)         // Dark Blue
     val TempBasal = Color(0xFF42A5F5)     // Light Blue
 }
@@ -52,11 +64,7 @@ val SurfaceBackground = Color(0xFFFAFAFA) // Background (Off-white)
 // Card Background - Dynamic based on dark mode
 val CardBackground: Color
     @Composable
-    get() = if (isSystemInDarkTheme()) {
-        Color(0xFF2C2C2E)  // Dark gray for dark mode
-    } else {
-        Color(0xFFFFFFFF)  // White for light mode
-    }
+    get() = MobiControlTheme.tokens.panel
 
 // Therapy Mode Colors
 object ModeColors {

@@ -31,6 +31,11 @@ import com.jwoglom.controlx2.pump.PumpHistoryLogFetcher
 import com.jwoglom.controlx2.pump.PumpHistoryLogSyncWorker
 import com.jwoglom.controlx2.pump.PumpSession
 import com.jwoglom.controlx2.shared.CommServiceCodes
+import com.jwoglom.controlx2.shared.AutomaticBolusIdentity
+import com.jwoglom.controlx2.shared.ManualBolusIdentity
+import com.jwoglom.controlx2.shared.ManualBolusOperation
+import com.jwoglom.controlx2.shared.BolusPermissionOperation
+import com.jwoglom.controlx2.shared.PostBolusRecordPlan
 import com.jwoglom.controlx2.shared.InitiateConfirmedBolusSerializer
 import com.jwoglom.controlx2.shared.MessagePaths
 import com.jwoglom.controlx2.shared.PumpMessageSerializer
@@ -137,7 +142,7 @@ class WearPumpCommService : Service(), CommServiceCallbacks {
     }
 
     override fun sendWearCommMessage(path: String, message: ByteArray) {
-        Timber.i("WearPumpCommService sendMessage: $path ${String(message)}")
+        Timber.i("WearPumpCommService sendMessage: $path ${MessagePaths.payloadForLog(path, message)}")
         messageBus.sendMessage(path, message, MessageBusSender.COMM_SERVICE)
     }
 
@@ -198,7 +203,7 @@ class WearPumpCommService : Service(), CommServiceCallbacks {
 
     private fun handleMessageReceived(path: String, data: ByteArray, sourceNodeId: String) {
         if (!path.startsWith(MessagePaths.PREFIX_FROM_PUMP)) {
-            Timber.d("WearPumpCommService messageReceived: $path ${String(data)} from $sourceNodeId")
+            Timber.d("WearPumpCommService messageReceived: $path ${MessagePaths.payloadForLog(path, data)} from $sourceNodeId")
         }
         when (path) {
             MessagePaths.TO_SERVER_FORCE_RELOAD -> {
@@ -281,6 +286,14 @@ class WearPumpCommService : Service(), CommServiceCallbacks {
             }
             MessagePaths.TO_SERVER_BOLUS_CANCEL -> {
                 bolusManager.resetBolusPrefs()
+            }
+            MessagePaths.TO_SERVER_CANCEL_AUTOMATIC_BOLUS -> {
+                AutomaticBolusIdentity.decode(data)?.let(::sendAutomaticBolusCancellation)
+                    ?: Timber.e("Invalid automatic bolus cancellation identity")
+            }
+            MessagePaths.TO_SERVER_CANCEL_MANUAL_BOLUS -> {
+                ManualBolusIdentity.decode(data)?.let(::sendManualBolusCancellation)
+                    ?: Timber.e("Invalid manual bolus cancellation identity")
             }
             MessagePaths.TO_SERVER_INITIATE_CONFIRMED_BOLUS -> {
                 val secretKey = prefs(this)?.getString("initiateBolusSecret", "") ?: ""
@@ -396,6 +409,36 @@ class WearPumpCommService : Service(), CommServiceCallbacks {
         sendWearCommMessage(MessagePaths.TO_CLIENT_SERVICE_RECEIVE_MESSAGE, statusBytes)
     }
 
+    override fun broadcastAutomaticBolusCancelResult(resultBytes: ByteArray) {
+        sendWearCommMessage(MessagePaths.TO_CLIENT_AUTOMATIC_BOLUS_CANCEL_RESULT, resultBytes)
+    }
+
+    override fun broadcastManualBolusCancelResult(resultBytes: ByteArray) {
+        sendWearCommMessage(MessagePaths.TO_CLIENT_MANUAL_BOLUS_CANCEL_RESULT, resultBytes)
+    }
+
+    override fun loadManualBolusOperation(): ManualBolusOperation? =
+        WearPrefs(applicationContext).manualBolusOperation()
+
+    override fun persistManualBolusOperation(operation: ManualBolusOperation) {
+        WearPrefs(applicationContext).setManualBolusOperation(operation)
+        sendWearCommMessage(MessagePaths.TO_CLIENT_MANUAL_BOLUS_OPERATION, operation.encode())
+    }
+
+    override fun loadBolusPermissionOperation(): BolusPermissionOperation? =
+        WearPrefs(applicationContext).bolusPermissionOperation()
+
+    override fun persistBolusPermissionOperation(operation: BolusPermissionOperation) {
+        WearPrefs(applicationContext).setBolusPermissionOperation(operation)
+        sendWearCommMessage(MessagePaths.TO_CLIENT_BOLUS_PERMISSION_OPERATION, operation.encode())
+    }
+
+    override fun loadPostBolusRecordPlan(): PostBolusRecordPlan? = null
+
+    override fun persistPostBolusRecordPlan(plan: PostBolusRecordPlan): Boolean = false
+
+    override fun clearPostBolusRecordPlan(): Boolean = true
+
     // --- History log factories ---
     override fun createHistoryLogFetcher(
         pumpSid: Int,
@@ -407,7 +450,9 @@ class WearPumpCommService : Service(), CommServiceCallbacks {
             pumpSid = pumpSid,
             pumpSession = pumpSession,
             autoFetchEnabled = autoFetchEnabled,
-            broadcastCallback = null
+            // Reuse already-persisted history for xDrip gap fill/terminal treatments. This is
+            // downstream of the existing insert and does not request or reorder pump history.
+            broadcastCallback = xdripMessageDispatcher::onHistoryLogItem,
         )
     }
 
@@ -470,10 +515,11 @@ class WearPumpCommService : Service(), CommServiceCallbacks {
     }
 
     private fun createNotification(): Notification {
-        val channelId = "ControlX2 Pump Host"
+        val appName = getString(R.string.app_name)
+        val channelId = "$packageName Pump Host"
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(channelId, "Pump Host Service", NotificationManager.IMPORTANCE_LOW).apply {
-            description = "ControlX2 pump host service"
+            description = "$appName pump host service"
             setShowBadge(false)
         }
         notificationManager.createNotificationChannel(channel)
@@ -620,6 +666,22 @@ class WearPumpCommService : Service(), CommServiceCallbacks {
         }
     }
 
+    private fun sendAutomaticBolusCancellation(identity: AutomaticBolusIdentity) {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.CANCEL_AUTOMATIC_BOLUS.ordinal
+            msg.obj = identity
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendManualBolusCancellation(identity: ManualBolusIdentity) {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.CANCEL_MANUAL_BOLUS.ordinal
+            msg.obj = identity
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
     private var started = false
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Timber.i("WearPumpCommService onStartCommand $intent $flags $startId")
@@ -630,7 +692,7 @@ class WearPumpCommService : Service(), CommServiceCallbacks {
         }
 
         started = true
-        Toast.makeText(this, "ControlX2 pump host starting", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "${getString(R.string.app_name)} pump host starting", Toast.LENGTH_SHORT).show()
         updateNotification("Initializing...")
 
         if (WearPrefs(applicationContext).pumpFinderServiceEnabled()) {
@@ -658,7 +720,7 @@ class WearPumpCommService : Service(), CommServiceCallbacks {
         try {
             unregisterReceiver(bleChangeReceiver)
         } catch (_: Exception) {}
-        Toast.makeText(this, "ControlX2 pump host stopped", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "${getString(R.string.app_name)} pump host stopped", Toast.LENGTH_SHORT).show()
     }
 
     private fun prefs(context: Context): SharedPreferences? {

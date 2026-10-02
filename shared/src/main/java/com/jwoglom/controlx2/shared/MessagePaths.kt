@@ -18,6 +18,18 @@ object MessagePaths {
     const val TO_SERVER_APP_RELOAD = "/to-server/app-reload"
     const val TO_SERVER_APPLY_RUNTIME_PREFS = "/to-server/apply-runtime-prefs"
     const val TO_SERVER_BOLUS_CANCEL = "/to-server/bolus-cancel"
+    const val TO_SERVER_CANCEL_AUTOMATIC_BOLUS = "/to-server/cancel-automatic-bolus"
+    const val TO_SERVER_CANCEL_MANUAL_BOLUS = "/to-server/cancel-manual-bolus"
+    const val TO_SERVER_CANCEL_QUICK_BOLUS = "/to-server/cancel-quick-bolus"
+    const val TO_SERVER_ACKNOWLEDGE_MANUAL_BOLUS_TERMINAL =
+        "/to-server/acknowledge-manual-bolus-terminal"
+    const val TO_SERVER_RECONCILE_MANUAL_BOLUS =
+        "/to-server/reconcile-manual-bolus"
+    const val TO_SERVER_ACKNOWLEDGE_QUICK_BOLUS_TERMINAL =
+        "/to-server/acknowledge-quick-bolus-terminal"
+    const val TO_SERVER_ACQUIRE_BOLUS_PERMISSION = "/to-server/acquire-bolus-permission"
+    const val TO_SERVER_PREPARE_BOLUS_WORKFLOW = "/to-server/prepare-bolus-workflow"
+    const val TO_SERVER_RELEASE_BOLUS_PERMISSION = "/to-server/release-bolus-permission"
     const val TO_SERVER_BOLUS_CONFIRM_DIALOG = "/to-server/bolus-confirm-dialog"
     const val TO_SERVER_BOLUS_REQUEST_PHONE = "/to-server/bolus-request-phone"
     const val TO_SERVER_BOLUS_REQUEST_WEAR = "/to-server/bolus-request-wear"
@@ -26,9 +38,11 @@ object MessagePaths {
     const val TO_SERVER_CONNECTED = "/to-server/connected"
     const val TO_SERVER_FORCE_RELOAD = "/to-server/force-reload"
     const val TO_SERVER_INITIATE_CONFIRMED_BOLUS = "/to-server/initiate-confirmed-bolus"
+    const val TO_SERVER_ENSURE_PUMP_CONNECTION = "/to-server/ensure-pump-connection"
     const val TO_SERVER_IS_PUMP_CONNECTED = "/to-server/is-pump-connected"
     const val TO_SERVER_PUMP_FINDER_STARTED = "/to-server/pump-finder-started"
     const val TO_SERVER_REFRESH_HISTORY_LOG_SYNC = "/to-server/refresh-history-log-sync"
+    const val TO_SERVER_RETRY_INITIAL_PROFILE_READ = "/to-server/retry-initial-profile-read"
     const val TO_SERVER_REQUEST_SERVICE_STATUS = "/to-server/request-service-status"
     const val TO_SERVER_RESTART_PUMP_FINDER = "/to-server/restart-pump-finder"
     const val TO_SERVER_SERVICE_STATUS_ACKNOWLEDGED = "/to-server/service-status-acknowledged"
@@ -57,6 +71,13 @@ object MessagePaths {
     const val TO_CLIENT_BOLUS_MIN_NOTIFY_THRESHOLD = "/to-client/bolus-min-notify-threshold"
     const val TO_CLIENT_BOLUS_NOT_ENABLED = "/to-client/bolus-not-enabled"
     const val TO_CLIENT_BOLUS_REJECTED = "/to-client/bolus-rejected"
+    const val TO_CLIENT_AUTOMATIC_BOLUS_CANCEL_RESULT = "/to-client/automatic-bolus-cancel-result"
+    const val TO_CLIENT_MANUAL_BOLUS_CANCEL_RESULT = "/to-client/manual-bolus-cancel-result"
+    const val TO_CLIENT_MANUAL_BOLUS_OPERATION = "/to-client/manual-bolus-operation"
+    const val TO_CLIENT_QUICK_BOLUS_CANCEL_RESULT = "/to-client/quick-bolus-cancel-result"
+    const val TO_CLIENT_QUICK_BOLUS_OPERATION = "/to-client/quick-bolus-operation"
+    const val TO_CLIENT_PUMP_HYDRATION_STATE = "/to-client/pump-hydration-state"
+    const val TO_CLIENT_BOLUS_PERMISSION_OPERATION = "/to-client/bolus-permission-operation"
     const val TO_CLIENT_CONNECTED = "/to-client/connected"
     const val TO_CLIENT_GLUCOSE_UNIT = "/to-client/glucose-unit"
     const val TO_CLIENT_INITIATE_CONFIRMED_BOLUS = "/to-client/initiate-confirmed-bolus"
@@ -89,6 +110,7 @@ object MessagePaths {
     const val FROM_PUMP_DEBUG_MESSAGE_CACHE = "/from-pump/debug-message-cache"
     const val FROM_PUMP_ENTERED_PAIRING_CODE = "/from-pump/entered-pairing-code"
     const val FROM_PUMP_INITIAL_PUMP_CONNECTION = "/from-pump/initial-pump-connection"
+    const val FROM_PUMP_INITIAL_PROFILE_READ_FAILED = "/from-pump/initial-profile-read-failed"
     const val FROM_PUMP_INVALID_PAIRING_CODE = "/from-pump/invalid-pairing-code"
     const val FROM_PUMP_MISSING_PAIRING_CODE = "/from-pump/missing-pairing-code"
     const val FROM_PUMP_PUMP_BONDED_NEEDS_MANUAL_UNBOND = "/from-pump/pump-bonded-needs-manual-unbond"
@@ -104,4 +126,9 @@ object MessagePaths {
     const val FROM_PUMP_RECEIVE_CACHED_MESSAGE = "/from-pump/receive-cached-message"
     const val FROM_PUMP_RECEIVE_MESSAGE = "/from-pump/receive-message"
     const val FROM_PUMP_RECEIVE_QUALIFYING_EVENT = "/from-pump/receive-qualifying-event"
+
+    fun payloadForLog(path: String, payload: ByteArray): String = when (path) {
+        TO_SERVER_SET_PAIRING_CODE -> "<redacted>"
+        else -> String(payload)
+    }
 }

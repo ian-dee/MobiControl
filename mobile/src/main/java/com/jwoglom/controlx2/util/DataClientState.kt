@@ -3,6 +3,7 @@ package com.jwoglom.controlx2.util
 import android.content.Context
 import com.jwoglom.controlx2.messaging.MessageBusFactory
 import com.jwoglom.controlx2.shared.messaging.StateSyncBus
+import com.jwoglom.controlx2.shared.messaging.StateKeys
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -47,6 +48,12 @@ class DataClientState(private val context: Context) {
         get() = get("pumpCurrentBasal")
         set(value) {
             set("pumpCurrentBasal", value)
+        }
+
+    var pumpControlIqMode: Pair<String, Instant>?
+        get() = get(StateKeys.PUMP_CONTROL_IQ_MODE)
+        set(value) {
+            set(StateKeys.PUMP_CONTROL_IQ_MODE, value)
         }
 
     var cgmReading: Pair<String, Instant>?

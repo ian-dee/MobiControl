@@ -50,7 +50,7 @@ class ManifestPermissionsTest {
             "android.permission.BLUETOOTH_ADVERTISE", // blessed-android
             "android.permission.ACCESS_FINE_LOCATION", // blessed-android (no SDK cap)
             "com.google.android.wearable.permission.BIND_WATCH_FACE_CONTROL", // wear watchface
-            "com.jwoglom.controlx2.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION", // androidx.core
+            "local.controlx21.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION", // androidx.core
         )
 
         // Auto-stripped by the platform past API 30.

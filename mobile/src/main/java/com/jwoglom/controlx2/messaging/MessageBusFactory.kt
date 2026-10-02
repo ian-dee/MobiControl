@@ -4,6 +4,7 @@ import android.content.Context
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import com.jwoglom.controlx2.Prefs
+import com.jwoglom.controlx2.shared.IntegrationGates
 import com.jwoglom.controlx2.shared.enums.DeviceRole
 import com.jwoglom.controlx2.shared.messaging.MessageBus
 import com.jwoglom.controlx2.shared.messaging.StateSyncBus
@@ -92,6 +93,11 @@ object MessageBusFactory {
      * @return true if Wear OS should be used, false for phone-only mode
      */
     private fun shouldUseWearOs(context: Context): Boolean {
+        if (!IntegrationGates.WATCH_INTEGRATION_ENABLED) {
+            Timber.i("Watch integration is disabled by the build gate")
+            return false
+        }
+
         // Check if Wear OS classes are available (handles compileOnly dependency)
         if (!isWearOsClassesAvailable()) {
             Timber.d("Wear OS classes not available")

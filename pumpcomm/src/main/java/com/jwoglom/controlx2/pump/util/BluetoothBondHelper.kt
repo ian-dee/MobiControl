@@ -15,7 +15,9 @@ import timber.log.Timber
  *
  * Returns true if no bond exists for [targetMac] after the call (either it was
  * already absent, or the unbond request was acknowledged and the OS dropped it
- * within the wait window).
+ * within the wait window). Android reports bond changes asynchronously, so this
+ * polls for confirmation instead of assuming a successful reflection call means
+ * the bond is gone.
  */
 @SuppressLint("MissingPermission") // BLUETOOTH_CONNECT is checked at runtime below for API 31+.
 fun removeBondCompat(ctx: Context, targetMac: String): Boolean {
@@ -50,8 +52,17 @@ fun removeBondCompat(ctx: Context, targetMac: String): Boolean {
         return false
     }
 
-    Thread.sleep(500)
-    val stillBonded = adapter.bondedDevices
-        ?.any { it.address.equals(targetMac, ignoreCase = true) } == true
-    return !stillBonded
+    val deadlineNanos = System.nanoTime() + 5_000_000_000L
+    do {
+        val stillBonded = adapter.bondedDevices
+            ?.any { it.address.equals(targetMac, ignoreCase = true) } == true
+        if (!stillBonded) {
+            Timber.i("removeBondCompat: Android confirmed $targetMac is no longer bonded")
+            return true
+        }
+        Thread.sleep(100)
+    } while (System.nanoTime() < deadlineNanos)
+
+    Timber.w("removeBondCompat: $targetMac remains bonded after timeout")
+    return false
 }

@@ -3,6 +3,10 @@ package com.jwoglom.controlx2.pump
 import android.content.Context
 import android.content.SharedPreferences
 import com.jwoglom.controlx2.shared.enums.GlucoseUnit
+import com.jwoglom.controlx2.shared.ManualBolusOperation
+import com.jwoglom.controlx2.shared.QuickBolusOperation
+import com.jwoglom.controlx2.shared.BolusPermissionOperation
+import com.jwoglom.controlx2.shared.PostBolusRecordPlan
 import com.jwoglom.controlx2.shared.util.SendType
 import com.jwoglom.pumpx2.pump.TandemError
 import kotlinx.coroutines.Job
@@ -53,6 +57,20 @@ interface CommServiceCallbacks {
     // --- Bolus response broadcasting (replaces direct BolusNotificationBroadcastReceiver reference) ---
     fun broadcastBolusInitiateResponse(responseBytes: ByteArray)
     fun broadcastBolusStatusUpdate(statusBytes: ByteArray)
+    fun broadcastAutomaticBolusCancelResult(resultBytes: ByteArray)
+    fun broadcastManualBolusCancelResult(resultBytes: ByteArray)
+    fun loadManualBolusOperation(): ManualBolusOperation?
+    fun persistManualBolusOperation(operation: ManualBolusOperation)
+    // Phone-only while the watch integration build gate remains disabled.
+    fun quickBolusLifecycleEnabled(): Boolean = false
+    fun broadcastQuickBolusCancelResult(resultBytes: ByteArray) = Unit
+    fun loadQuickBolusOperation(): QuickBolusOperation? = null
+    fun persistQuickBolusOperation(operation: QuickBolusOperation) = Unit
+    fun loadBolusPermissionOperation(): BolusPermissionOperation?
+    fun persistBolusPermissionOperation(operation: BolusPermissionOperation)
+    fun loadPostBolusRecordPlan(): PostBolusRecordPlan?
+    fun persistPostBolusRecordPlan(plan: PostBolusRecordPlan): Boolean
+    fun clearPostBolusRecordPlan(): Boolean
 
     // --- History log factories (replaces direct HistoryLogFetcher/HistoryLogSyncWorker/HistoryLogRepo) ---
     fun createHistoryLogFetcher(

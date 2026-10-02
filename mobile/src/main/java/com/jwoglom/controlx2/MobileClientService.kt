@@ -15,6 +15,7 @@ import com.jwoglom.controlx2.clientcomm.ClientMessageHandler
 import com.jwoglom.controlx2.clientcomm.ClientSideEffects
 import com.jwoglom.controlx2.clientcomm.ClientStateStore
 import com.jwoglom.controlx2.messaging.MessageBusFactory
+import com.jwoglom.controlx2.shared.IntegrationGates
 import com.jwoglom.controlx2.shared.enums.GlucoseUnit
 import com.jwoglom.controlx2.shared.messaging.MessageBus
 import com.jwoglom.controlx2.shared.messaging.MessageListener
@@ -43,6 +44,12 @@ class MobileClientService : Service() {
         super.onCreate()
         setupTimber("MCS", context = this)
         Timber.d("MobileClientService onCreate")
+
+        if (!IntegrationGates.WATCH_INTEGRATION_ENABLED) {
+            Timber.w("MobileClientService stopped: watch integration is disabled")
+            stopSelf()
+            return
+        }
 
         messageBus = MessageBusFactory.createMessageBus(this)
 
@@ -129,7 +136,8 @@ class MobileClientService : Service() {
     }
 
     private fun createNotification(): Notification {
-        val channelId = "ControlX2 Client Service"
+        val appName = getString(R.string.app_name)
+        val channelId = "$packageName Client Service"
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(
@@ -137,7 +145,7 @@ class MobileClientService : Service() {
             "Client Service notifications",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "ControlX2 client service channel"
+            description = "$appName client service channel"
             setShowBadge(false)
         }
         notificationManager.createNotificationChannel(channel)
@@ -154,10 +162,12 @@ class MobileClientService : Service() {
         }
 
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("ControlX2 Client: $stateText")
+            .setContentTitle("$appName Client: $stateText")
             .setContentText("Watch is managing the pump connection")
             .setContentIntent(pendingIntent)
-            .setSmallIcon(IconCompat.createWithResource(this, R.drawable.pump))
+            .setSmallIcon(
+                IconCompat.createWithResource(this, R.drawable.ic_mobicontrol_notification),
+            )
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()

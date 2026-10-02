@@ -5,6 +5,5 @@ sealed class Screen(
 ) {
     object FirstLaunch : Screen("FirstLaunch")
     object PumpSetup : Screen("PumpSetup")
-    object AppSetup : Screen("AppSetup")
     object Landing : Screen("Landing")
 }

@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:clipToOutline="true"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/mobicontrol_cover_widget_background"
+    android:orientation="vertical"
+    android:padding="@dimen/mobicontrol_widget_content_inset">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="20dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:id="@+id/widget_brand"
+            android:layout_width="14dp"
+            android:layout_marginStart="4dp"
+            android:layout_height="18dp"
+            android:background="@drawable/mobicontrol_widget_brand_badge"
+            android:contentDescription="@string/mobicontrol_widget_name"
+            android:padding="2dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/mobicontrol_widget_mark" />
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="@string/mobicontrol_widget_name"
+            android:textColor="#FF15243C"
+            android:textSize="9sp"
+            android:fontFamily="@font/field_kit_barlow_medium"
+            android:textStyle="normal" />
+
+        <TextView
+        android:fontFamily="@font/field_kit_barlow_medium"
+            android:id="@+id/widget_freshness"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="7dp"
+            android:layout_weight="1"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="@string/mobicontrol_widget_no_data"
+            android:textColor="#FF5C6B80"
+            android:textSize="7sp" />
+
+        <LinearLayout
+            android:id="@+id/widget_mode_chip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/widget_mode_icon"
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:contentDescription="@string/mobicontrol_widget_mode_description"
+                android:src="@drawable/ic_widget_mode_standard" />
+
+            <TextView
+                android:id="@+id/widget_mode_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="2dp"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="@string/mobicontrol_widget_mode_standard"
+                android:textColor="#FF1976D2"
+                android:textSize="6sp"
+                android:fontFamily="@font/field_kit_barlow_medium" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/widget_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/mobicontrol_widget_status_badge"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:paddingStart="4dp"
+            android:paddingTop="2dp"
+            android:paddingEnd="4dp"
+            android:paddingBottom="2dp"
+            android:text="@string/mobicontrol_widget_status_no_data"
+            android:textColor="#FF5C6B80"
+            android:textSize="6sp"
+            android:fontFamily="@font/field_kit_barlow_medium"
+            android:textStyle="normal" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="4dp"
+        android:layout_weight="1"
+        android:baselineAligned="false"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="98dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:id="@+id/widget_bg_tile"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="@drawable/mobicontrol_widget_glucose_tile"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingStart="5dp"
+                android:paddingEnd="5dp">
+
+                <TextView
+                    android:id="@+id/widget_bg_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:text="@string/mobicontrol_widget_glucose_label_preview"
+                    android:textColor="#FF4C6B52"
+                    android:textSize="6sp"
+                    android:fontFamily="@font/field_kit_barlow_medium"
+                    android:textStyle="normal" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/widget_bg_value"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:text="155"
+                        android:textColor="#FF237A35"
+                        android:textSize="28sp"
+                        android:fontFamily="@font/field_kit_rajdhani_semibold"
+                        android:textStyle="normal" />
+
+                    <TextView
+                        android:id="@+id/widget_bg_trend"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:text="▶"
+                        android:textColor="#FF237A35"
+                        android:textSize="16sp"
+                        android:fontFamily="@font/field_kit_barlow_medium"
+                        android:textStyle="normal" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/widget_iob_tile"
+                android:layout_width="match_parent"
+                android:layout_height="30dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/mobicontrol_widget_iob_tile"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:paddingStart="5dp"
+                android:paddingEnd="5dp">
+
+                <TextView
+                    android:id="@+id/widget_iob_value"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:text="3.00"
+                    android:textColor="#FF1769B0"
+                    android:textSize="20sp"
+                    android:fontFamily="@font/field_kit_rajdhani_semibold"
+                    android:textStyle="normal" />
+
+                <TextView
+                    android:id="@+id/widget_iob_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="3dp"
+                    android:includeFontPadding="false"
+                    android:maxLines="1"
+                    android:text="@string/mobicontrol_widget_iob_label"
+                    android:textColor="#FF48647E"
+                    android:textSize="6sp"
+                    android:fontFamily="@font/field_kit_barlow_medium"
+                    android:textStyle="normal" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/widget_chart_panel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="@drawable/mobicontrol_widget_chart_panel"
+            android:orientation="vertical"
+            android:paddingStart="4dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="4dp"
+            android:paddingBottom="3dp">
+
+            <ImageView
+                android:id="@+id/widget_chart"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@string/mobicontrol_widget_chart_description"
+                android:scaleType="fitXY"
+                android:src="@drawable/mobicontrol_widget_chart_preview" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

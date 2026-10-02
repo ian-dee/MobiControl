@@ -1,8 +1,6 @@
 package com.jwoglom.controlx2.presentation.screens.sections.components
 
 import android.content.Context
-import android.widget.Toast
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
@@ -18,22 +16,24 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jwoglom.controlx2.R
 import com.jwoglom.controlx2.presentation.screens.sections.Settings
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
-import com.jwoglom.controlx2.util.AppVersionCheck
 import com.jwoglom.controlx2.util.AppVersionInfo
 
 @Composable
 fun VersionInfo(
-    context: Context
+    context: Context,
+    compact: Boolean = false,
 ) {
     val ver = AppVersionInfo(context)
     Text(buildAnnotatedString {
-        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold, fontSize = 20.sp)) {
-            append("ControlX2 ")
+        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold, fontSize = if (compact) 14.sp else 20.sp)) {
+            append(context.getString(R.string.app_name))
+            append(" ")
             append(ver.version)
         }
-    }, Modifier.padding(start = 16.dp, top = 16.dp))
+    }, Modifier.padding(start = if (compact) 0.dp else 16.dp, top = if (compact) 0.dp else 16.dp))
     Text(buildAnnotatedString {
         append("with PumpX2 ")
         append(ver.pumpX2)
@@ -56,10 +56,7 @@ fun VersionInfo(
         }
         append(ver.pumpX2BuildTime)
         append("\n")
-    }, lineHeight = 20.sp, fontSize = 14.sp, modifier = Modifier.padding(start = 16.dp).clickable {
-        Toast.makeText(context, "Checking for version update", Toast.LENGTH_SHORT).show()
-        AppVersionCheck(context)
-    })
+    }, lineHeight = if (compact) 16.sp else 20.sp, fontSize = if (compact) 11.sp else 14.sp, modifier = Modifier.padding(start = if (compact) 0.dp else 16.dp))
 }
 
 

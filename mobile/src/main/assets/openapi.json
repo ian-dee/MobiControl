@@ -1,9 +1,9 @@
 {
   "openapi": "3.0.0",
   "info": {
-    "title": "ControlX2 HTTP Debug API",
+    "title": "MobiControl HTTP Debug API",
     "version": "1.0.0",
-    "description": "HTTP API for debugging and managing ControlX2 pump communication"
+    "description": "HTTP API for debugging and managing MobiControl pump communication"
   },
   "servers": [
     {
@@ -193,7 +193,7 @@
     "/": {
       "get": {
         "summary": "Get debug API version info",
-        "description": "Returns ControlX2 and PumpX2 build metadata for the debug API instance",
+        "description": "Returns MobiControl and PumpX2 build metadata for the debug API instance",
         "responses": {
           "200": {
             "description": "Version info",

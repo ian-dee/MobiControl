@@ -41,6 +41,10 @@ fun ServiceDisabledMessage(
     val context = LocalContext.current
     val ds = LocalDataStore.current
 
+    // Developer Preview intentionally keeps the communication service off;
+    // do not present its disabled state as something the user should repair.
+    if (Prefs(context).developerPreviewEnabled()) return
+
     var enabled by remember { mutableStateOf(Prefs(context).serviceEnabled()) }
     var onlySnoopEnabled by remember { mutableStateOf(Prefs(context).onlySnoopBluetoothEnabled()) }
 
@@ -72,7 +76,7 @@ fun ServiceDisabledMessage(
                 )
                 Text(buildAnnotatedString {
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                        append("The background service is disabled, so ControlX2 cannot connect to the pump. ")
+                        append("The background service is disabled, so MobiControl cannot connect to the pump. ")
                     }
                     append("Press here to re-enable the service.")
                 })

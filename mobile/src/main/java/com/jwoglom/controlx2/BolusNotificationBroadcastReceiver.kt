@@ -17,20 +17,81 @@ import com.jwoglom.controlx2.shared.messaging.MessageBus
 import com.jwoglom.controlx2.shared.messaging.MessageBusSender
 import com.jwoglom.controlx2.shared.PumpMessageSerializer
 import com.jwoglom.controlx2.shared.MessagePaths
+import com.jwoglom.controlx2.shared.ManualBolusIdentity
+import com.jwoglom.controlx2.shared.isActiveBolus
+import com.jwoglom.controlx2.shared.isActiveManualBolus
 import com.jwoglom.controlx2.shared.util.shortTimeAgo
 import com.jwoglom.controlx2.shared.util.twoDecimalPlaces
 import com.jwoglom.pumpx2.pump.PumpState
 import com.jwoglom.pumpx2.pump.messages.models.InsulinUnit
-import com.jwoglom.pumpx2.pump.messages.request.control.CancelBolusRequest
 import com.jwoglom.pumpx2.pump.messages.request.control.InitiateBolusRequest
 import com.jwoglom.pumpx2.pump.messages.request.currentStatus.CurrentBolusStatusRequest
 import com.jwoglom.pumpx2.pump.messages.response.control.InitiateBolusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBolusStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.BolusDeliveryHistoryLog
 import com.jwoglom.pumpx2.shared.Hex
 import com.jwoglom.controlx2.Prefs
 import timber.log.Timber
 import java.time.Instant
 
+internal fun manualBolusSystemNotificationEnabled(context: Context): Boolean =
+    Prefs(context).systemNotificationPreferences().manualBolusProgress
+
+/**
+ * Notification-only routing for the legacy manual-bolus Android notification.
+ *
+ * CurrentBolusStatusResponse is shared by manual, Quick Bolus, and Control-IQ boluses. The legacy
+ * receiver also retains the most recent manual InitiateBolusRequest so it can render the requested
+ * amount. Passing every pump status to that receiver lets a later automatic/Quick bolus be rendered
+ * with the retained manual amount. This route carries a manual identity only while the response is
+ * demonstrably part of that exact manual lifecycle.
+ */
+internal data class ManualBolusSystemNotificationRoute(
+    val notificationIdentity: ManualBolusIdentity?,
+    val nextActiveIdentity: ManualBolusIdentity?,
+)
+
+internal fun routeManualBolusSystemNotification(
+    response: CurrentBolusStatusResponse,
+    activeIdentity: ManualBolusIdentity?,
+    responseIdentity: ManualBolusIdentity?,
+): ManualBolusSystemNotificationRoute = when {
+    response.isActiveManualBolus() -> {
+        val exactIdentity = responseIdentity?.takeIf { it.bolusId == response.bolusId }
+        ManualBolusSystemNotificationRoute(exactIdentity, exactIdentity)
+    }
+    response.isActiveBolus() -> {
+        // A different active source cannot complete or update the retained manual notification.
+        ManualBolusSystemNotificationRoute(null, null)
+    }
+    response.isTerminalBolusStatus() &&
+        response.bolusId > 0 &&
+        response.bolusSource == BolusDeliveryHistoryLog.BolusSource.BLUETOOTH_REMOTE_BOLUS -> {
+        val exactIdentity = responseIdentity?.takeIf { it.bolusId == response.bolusId }
+        ManualBolusSystemNotificationRoute(exactIdentity, null)
+    }
+    response.isTerminalBolusStatus() &&
+        response.bolusId == 0 -> ManualBolusSystemNotificationRoute(activeIdentity, null)
+    response.isTerminalBolusStatus() -> ManualBolusSystemNotificationRoute(null, null)
+    else -> ManualBolusSystemNotificationRoute(null, activeIdentity)
+}
+
+/** Defense in depth at the receiver boundary: identity, source, ID, and amount must agree. */
+internal fun matchesManualBolusSystemNotification(
+    request: InitiateBolusRequest,
+    identity: ManualBolusIdentity?,
+    response: CurrentBolusStatusResponse,
+): Boolean {
+    if (identity == null || request.bolusID != identity.bolusId) return false
+    // An inactive all-zero pump response decodes source ID 0 as QUICK_BOLUS even though there is
+    // no current bolus. Its retained, service-issued manual identity is the source of truth here.
+    if (response.bolusId == 0 && response.isTerminalBolusStatus()) return true
+    if (response.bolusId != identity.bolusId ||
+        response.bolusSource != BolusDeliveryHistoryLog.BolusSource.BLUETOOTH_REMOTE_BOLUS
+    ) return false
+    return response.requestedVolume == request.totalVolume &&
+        (response.isActiveManualBolus() || response.isTerminalBolusStatus())
+}
 
 class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -78,25 +139,13 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                         return
                     }
 
-                    val cancelIntent =
-                        Intent(context, BolusNotificationBroadcastReceiver::class.java).apply {
-                            putExtra("action", "CANCEL")
-                            putExtra("bolusId", intentRequest.bolusID)
-                        }
-                    val cancelPendingIntent = PendingIntent.getBroadcast(
-                        context,
-                        2003,
-                        cancelIntent,
-                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
-                    )
-
                     reply(
                         context, notifId, confirmBolusRequestBaseNotification(
                             context,
                             "Requesting Bolus",
                             "${bolusSummaryText(intentRequest)} " +
                                     "will be delivered"
-                        ).addAction(R.drawable.decline, "Cancel", cancelPendingIntent)
+                        )
                     )
                 }
             }
@@ -136,7 +185,9 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                         val cancelIntent =
                             Intent(context, BolusNotificationBroadcastReceiver::class.java).apply {
                                 putExtra("action", "CANCEL")
-                                putExtra("bolusId", initiateResponse.bolusId)
+                                intent.getByteArrayExtra(EXTRA_MANUAL_BOLUS_IDENTITY)?.let {
+                                    putExtra(EXTRA_MANUAL_BOLUS_IDENTITY, it)
+                                }
                             }
                         val cancelPendingIntent = PendingIntent.getBroadcast(
                             context,
@@ -160,13 +211,28 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                             ?.apply()
                         
                         // Start periodic status updates
-                        startBolusStatusUpdates(context, messageBus, initiateResponse.bolusId, initiateRequest)
+                        startBolusStatusUpdates(context, messageBus)
                     }
                 }
             }
             "STATUS_UPDATE" -> {
                 getCurrentBolusToConfirm(context)?.let { initiateRequest ->
                     getCurrentBolusStatusResponse(intent)?.let { statusResponse ->
+                        val identity = intent.getByteArrayExtra(EXTRA_MANUAL_BOLUS_IDENTITY)
+                            ?.let(ManualBolusIdentity::decode)
+                        if (!matchesManualBolusSystemNotification(
+                                request = initiateRequest,
+                                identity = identity,
+                                response = statusResponse,
+                            )
+                        ) {
+                            Timber.w(
+                                "Ignoring non-matching manual bolus system notification status: " +
+                                    "requestId=${initiateRequest.bolusID}, identity=$identity, " +
+                                    "statusId=${statusResponse.bolusId}, source=${statusResponse.bolusSource}",
+                            )
+                            return
+                        }
                         // Only update notification if status has changed
                         val previousStatus = prefs(context)?.getString("lastBolusStatus", null)
                         val currentStatus = statusResponse.status.name
@@ -176,7 +242,7 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                         // Update if status changed OR if bolusId changed (especially when it becomes 0 for completion)
                         val statusChanged = previousStatus != currentStatus
                         val bolusIdChanged = previousBolusId != currentBolusId
-                        val bolusCompleted = currentBolusId == 0 && previousBolusId != 0
+                        val bolusCompleted = statusResponse.isTerminalBolusStatus()
                         
                         if (statusChanged || bolusIdChanged) {
                             Timber.d("BolusNotificationBroadcastReceiver status changed: $previousStatus -> $currentStatus, bolusId: $previousBolusId -> $currentBolusId")
@@ -192,7 +258,6 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                             // Determine status text - prioritize completion detection
                             val statusText = when {
                                 bolusCompleted -> "was completed."
-                                currentBolusId == 0 -> "was completed."
                                 statusResponse.status == CurrentBolusStatusResponse.CurrentBolusStatus.REQUESTING -> "is being prepared."
                                 statusResponse.status == CurrentBolusStatusResponse.CurrentBolusStatus.DELIVERING -> "is being delivered."
                                 else -> "was completed."
@@ -205,7 +270,7 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                                 "The ${bolusSummaryText(initiateRequest)} $statusText"
                             )
                             
-                            if (bolusCompleted || currentBolusId == 0) {
+                            if (bolusCompleted) {
                                 val dismissIntent =
                                     Intent(context, BolusNotificationBroadcastReceiver::class.java).apply {
                                         putExtra("action", "DISMISS")
@@ -221,7 +286,9 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                                 val cancelIntent =
                                     Intent(context, BolusNotificationBroadcastReceiver::class.java).apply {
                                         putExtra("action", "CANCEL")
-                                        putExtra("bolusId", currentBolusId)
+                                        intent.getByteArrayExtra(EXTRA_MANUAL_BOLUS_IDENTITY)?.let {
+                                            putExtra(EXTRA_MANUAL_BOLUS_IDENTITY, it)
+                                        }
                                     }
                                 val cancelPendingIntent = PendingIntent.getBroadcast(
                                     context,
@@ -237,18 +304,14 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                             Timber.d("BolusNotificationBroadcastReceiver status unchanged: $currentStatus, bolusId: $currentBolusId, skipping notification update")
                         }
                         
-                        // Stop updates if bolus is complete (bolusId becomes 0 or status is complete)
-                        if (bolusCompleted || (currentBolusId == 0 && previousBolusId != 0) || 
-                            (statusResponse.status != CurrentBolusStatusResponse.CurrentBolusStatus.REQUESTING && 
-                             statusResponse.status != CurrentBolusStatusResponse.CurrentBolusStatus.DELIVERING && 
-                             currentBolusId == 0)) {
-                            stopBolusStatusUpdates(context)
-                            // Clear the saved status after a delay to allow the completion notification to be shown
+                        // A terminal status can retain the completed bolus ID briefly. Stop on the
+                        // pump status itself rather than waiting for a later zero-ID response.
+                        if (bolusCompleted) {
+                            stopBolusStatusUpdates()
+                            // Clear only legacy notification staging after the terminal notification is posted.
+                            // Durable manual-bolus reconciliation is owned elsewhere and is intentionally untouched.
                             Handler(Looper.getMainLooper()).postDelayed({
-                                prefs(context)?.edit()
-                                    ?.remove("lastBolusStatus")
-                                    ?.remove("lastBolusId")
-                                    ?.apply()
+                                resetBolusPrefs(context)
                             }, 1000)
                         }
                     }
@@ -256,7 +319,7 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
             }
             "REJECT" -> {
                 CommService.cancelAutoApproveStatic(context)
-                stopBolusStatusUpdates(context)
+                stopBolusStatusUpdates()
                 reply(
                     context, notifId, confirmBolusRequestBaseNotification(
                         context,
@@ -273,19 +336,33 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                 resetBolusPrefs(context)
             }
             "CANCEL" -> {
-                stopBolusStatusUpdates(context)
-                val bolusId = intent.getIntExtra("bolusId", 0)
-
-                // Send cancellation command - retry logic with delays to ensure MessageBus is ready
-                // Note: Multiple sends are intentional to increase delivery probability
-                val cancelBytes = PumpMessageSerializer.toBytes(CancelBolusRequest(bolusId))
-                repeat (5) { attempt ->
+                val identity = intent.getByteArrayExtra(EXTRA_MANUAL_BOLUS_IDENTITY)
+                    ?.let(ManualBolusIdentity::decode)
+                if (identity == null) {
+                    reply(
+                        context,
+                        notifId,
+                        confirmBolusRequestBaseNotification(
+                            context,
+                            "Open MobiControl to cancel",
+                            "The pump session could not be verified from this notification.",
+                        ),
+                    )
+                } else {
+                    reply(
+                        context,
+                        notifId,
+                        confirmBolusRequestBaseNotification(
+                            context,
+                            "Verifying bolus before cancellation",
+                            "Re-reading current pump status before sending one cancellation request.",
+                        ),
+                    )
                     sendMessageWhenReady(
                         messageBus,
-                        MessagePaths.TO_PUMP_COMMAND,
-                        cancelBytes,
+                        MessagePaths.TO_SERVER_CANCEL_MANUAL_BOLUS,
+                        identity.encode(),
                         context,
-                        delayMs = attempt * 100L // Stagger retries: 0ms, 100ms, 200ms, 300ms, 400ms
                     )
                 }
             }
@@ -302,6 +379,20 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
                 )
                 resetBolusPrefs(context)
             }
+        }
+    }
+
+    companion object {
+        const val EXTRA_MANUAL_BOLUS_IDENTITY = "manualBolusIdentity"
+
+        /** Removes only the Android progress/result presentation for the current manual bolus. */
+        fun dismissSystemNotification(context: Context) {
+            val notificationId = context
+                .getSharedPreferences("WearX2", Context.MODE_PRIVATE)
+                .getInt("initiateBolusNotificationId", 100)
+            val notificationManager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.cancel(notificationId)
         }
     }
 
@@ -452,8 +543,13 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
     }
 
     private fun makeNotif(context: Context?, id: Int, notif: Notification) {
+        if (context == null) return
         val notificationManager =
-            context?.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager;
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (!manualBolusSystemNotificationEnabled(context)) {
+            notificationManager.cancel(id)
+            return
+        }
         notificationManager.notify(id, notif)
     }
 
@@ -467,62 +563,30 @@ class BolusNotificationBroadcastReceiver : BroadcastReceiver() {
         return context?.getSharedPreferences("WearX2", Context.MODE_PRIVATE)
     }
 
-    private var statusUpdateHandler: Handler? = null
-    private var statusUpdateRunnable: Runnable? = null
-
     /**
      * Start periodic status updates for an active bolus
      */
     private fun startBolusStatusUpdates(
         context: Context,
         messageBus: MessageBus,
-        bolusId: Int,
-        initiateRequest: InitiateBolusRequest
     ) {
-        stopBolusStatusUpdates(context) // Stop any existing updates
-        
-        val handler = Handler(Looper.getMainLooper())
-        statusUpdateHandler = handler
-        
-        var requestCount = 0
-        val maxRequests = 60 // Request for up to 60 seconds (60 requests at 1 second intervals)
-        
-        val runnable = object : Runnable {
-            override fun run() {
-                if (requestCount < maxRequests) {
-                    Timber.d("BolusNotificationBroadcastReceiver requesting bolus status update (request $requestCount)")
-                    sendMessageWhenReady(
-                        messageBus,
-                        MessagePaths.TO_PUMP_COMMANDS_BUST_CACHE,
-                        PumpMessageSerializer.toBulkBytes(listOf(CurrentBolusStatusRequest())),
-                        context,
-                        delayMs = 0
-                    )
-                    requestCount++
-                    handler.postDelayed(this, 1000) // Request every second
-                } else {
-                    Timber.d("BolusNotificationBroadcastReceiver stopping status updates after $maxRequests requests")
-                    stopBolusStatusUpdates(context)
-                }
-            }
-        }
-        
-        statusUpdateRunnable = runnable
-        // Start first request after a short delay
-        handler.postDelayed(runnable, 500)
+        BolusStatusPolling.start(
+            requestStatus = {
+                sendMessageWhenReady(
+                    messageBus,
+                    MessagePaths.TO_PUMP_COMMANDS_BUST_CACHE,
+                    PumpMessageSerializer.toBulkBytes(listOf(CurrentBolusStatusRequest())),
+                    context,
+                    delayMs = 0,
+                )
+            },
+        )
     }
 
     /**
      * Stop periodic status updates
      */
-    private fun stopBolusStatusUpdates(context: Context) {
-        statusUpdateRunnable?.let { runnable ->
-            statusUpdateHandler?.removeCallbacks(runnable)
-            statusUpdateRunnable = null
-            statusUpdateHandler = null
-            Timber.d("BolusNotificationBroadcastReceiver stopped status updates")
-        }
-    }
+    private fun stopBolusStatusUpdates() = BolusStatusPolling.stop()
 
     /**
      * Send a message through the MessageBus, ensuring the bus is ready first.

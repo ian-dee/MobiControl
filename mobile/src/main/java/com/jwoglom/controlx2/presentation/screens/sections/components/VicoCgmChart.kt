@@ -8,8 +8,10 @@ import android.graphics.Typeface
 import android.text.Layout
 import java.text.SimpleDateFormat
 import java.util.Date
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -25,18 +27,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,33 +45,40 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.jwoglom.controlx2.LocalDataStore
+import com.jwoglom.controlx2.GraphDisplayPreferences
 import com.jwoglom.controlx2.Prefs
 import com.jwoglom.controlx2.db.historylog.HistoryLogItem
 import com.jwoglom.controlx2.db.historylog.HistoryLogViewModel
 import com.jwoglom.controlx2.presentation.theme.CardBackground
+import com.jwoglom.controlx2.presentation.theme.AppSkin
+import com.jwoglom.controlx2.presentation.theme.MobiControlTheme
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
 import com.jwoglom.controlx2.presentation.theme.Elevation
 import com.jwoglom.controlx2.presentation.theme.GlucoseColors
+import com.jwoglom.controlx2.presentation.theme.GraphGlucoseDotColors
 import com.jwoglom.controlx2.presentation.theme.GridLineColor
 import com.jwoglom.controlx2.presentation.theme.Spacing
 import com.jwoglom.controlx2.presentation.theme.SurfaceBackground
+import com.jwoglom.controlx2.presentation.theme.SkinPanel
+import com.jwoglom.controlx2.presentation.theme.SkinPanelVariant
 import com.jwoglom.controlx2.presentation.theme.TargetRangeColor
 import com.jwoglom.controlx2.presentation.theme.InsulinColors
 import com.jwoglom.controlx2.presentation.theme.CarbColor
-import com.jwoglom.controlx2.presentation.theme.ModeColors
 import com.jwoglom.controlx2.shared.enums.GlucoseUnit
 import com.jwoglom.controlx2.shared.util.GlucoseConverter
-import com.jwoglom.controlx2.shared.util.pumpTimeToLocalTz
-import com.jwoglom.pumpx2.pump.messages.helpers.Dates
 import com.jwoglom.pumpx2.pump.messages.models.InsulinUnit
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ControlIQInfoAbstractResponse.UserModeType
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.LastBolusStatusAbstractResponse
@@ -82,9 +90,9 @@ import com.jwoglom.pumpx2.pump.messages.response.historyLog.DexcomG7CGMHistoryLo
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.CgmDataFsl2HistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.CgmDataFsl3HistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.CgmDataGxHistoryLog
-import com.jwoglom.pumpx2.pump.messages.response.historyLog.CarbEnteredHistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.ControlIQUserModeChangeHistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.DailyBasalHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.DateChangeHistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.HistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.HistoryLogParser
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.HypoMinimizerResumeHistoryLog
@@ -93,40 +101,29 @@ import com.jwoglom.pumpx2.pump.messages.response.historyLog.PumpingResumedHistor
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.PumpingSuspendedHistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.TempRateActivatedHistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.TempRateCompletedHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.TimeChangedHistoryLog
 import com.patrykandpatrick.vico.compose.cartesian.CartesianChartHost
-import com.patrykandpatrick.vico.compose.cartesian.layer.rememberColumnCartesianLayer
+import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLine
 import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLineCartesianLayer
 import com.patrykandpatrick.vico.compose.cartesian.marker.rememberDefaultCartesianMarker
 import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
 import com.patrykandpatrick.vico.compose.cartesian.rememberVicoScrollState
-import com.patrykandpatrick.vico.compose.common.component.rememberLineComponent
-import com.patrykandpatrick.vico.compose.common.component.rememberShapeComponent
 import com.patrykandpatrick.vico.compose.common.fill
-import com.patrykandpatrick.vico.compose.common.shape.toVicoShape
 import com.patrykandpatrick.vico.core.cartesian.Scroll
-import com.patrykandpatrick.vico.core.cartesian.CartesianDrawingContext
-import com.patrykandpatrick.vico.core.cartesian.CartesianMeasuringContext
-import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModel
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianChartModelProducer
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianLayerRangeProvider
 import com.patrykandpatrick.vico.core.cartesian.data.lineSeries
-import com.patrykandpatrick.vico.core.cartesian.data.columnSeries
 import com.patrykandpatrick.vico.core.cartesian.marker.DefaultCartesianMarker
 import com.patrykandpatrick.vico.core.cartesian.marker.CartesianMarker
 import com.patrykandpatrick.vico.core.cartesian.marker.CartesianMarkerVisibilityListener
 import com.patrykandpatrick.vico.core.cartesian.marker.LineCartesianLayerMarkerTarget
-import com.patrykandpatrick.vico.core.cartesian.CartesianChart
-import com.patrykandpatrick.vico.core.cartesian.CartesianChart.PersistentMarkerScope
-import com.patrykandpatrick.vico.core.cartesian.layer.CartesianLayerDimensions
-import com.patrykandpatrick.vico.core.cartesian.layer.CartesianLayerMargins
-import com.patrykandpatrick.vico.core.cartesian.layer.ColumnCartesianLayer
+import com.patrykandpatrick.vico.core.cartesian.layer.LineCartesianLayer
 import com.patrykandpatrick.vico.core.common.Insets
-import com.patrykandpatrick.vico.core.common.component.Component
 import com.patrykandpatrick.vico.core.common.component.TextComponent
 import com.patrykandpatrick.vico.core.common.data.ExtraStore
-import java.time.Instant
-import java.time.ZoneId
 import java.util.Locale
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -139,11 +136,15 @@ data class CgmDataPoint(
     val value: Float
 )
 
-internal fun HistoryLog.toChartTimestampSeconds(): Long {
-    return pumpTimeToLocalTz(Dates.fromJan12008EpochSecondsToDate(pumpTimeSec)).epochSecond
+internal fun HistoryLog.toChartTimestampSeconds(
+    timeline: PumpChartTimeline = PumpChartTimeline.Empty,
+): Long {
+    return timeline.chartTimestamp(sequenceNum, pumpTimeSec)
 }
 
-internal fun HistoryLogItem.toCgmDataPoint(): CgmDataPoint? {
+internal fun HistoryLogItem.toCgmDataPoint(
+    timeline: PumpChartTimeline = PumpChartTimeline.Empty,
+): CgmDataPoint? {
     val parsed = parse()
     // PumpX2 1.8.8+: FSL2/FSL3 use the same post-header layout as Gx (see parse() in pumpx2-messages).
     val value = when (parsed) {
@@ -160,7 +161,7 @@ internal fun HistoryLogItem.toCgmDataPoint(): CgmDataPoint? {
     }
 
     // Tandem history-log times need the same pump-local timezone correction used elsewhere.
-    val timestamp = parsed.toChartTimestampSeconds()
+    val timestamp = timeline.chartTimestamp(seqId, parsed.pumpTimeSec)
     return CgmDataPoint(
         timestamp = timestamp,
         value = value
@@ -171,15 +172,65 @@ internal fun formatChartTimestamp(timestampSeconds: Long, timeFormat: SimpleDate
     return timeFormat.format(Date(timestampSeconds * 1000L))
 }
 
+internal data class RelativeTimeAxisTick(
+    val position: Float,
+    val label: String,
+)
+
+internal fun relativeTimeAxisTicks(
+    historyEndTimeSeconds: Long,
+    viewportStartTimeSeconds: Long,
+    viewportEndTimeSeconds: Long,
+    timeFormat: SimpleDateFormat,
+): List<RelativeTimeAxisTick> {
+    val viewportSeconds = viewportEndTimeSeconds - viewportStartTimeSeconds
+    if (viewportSeconds <= 0L) return emptyList()
+
+    val ticks = (2..DASHBOARD_HISTORY_HOURS step 2).mapNotNull { hoursAgo ->
+        val timestamp = historyEndTimeSeconds - hoursAgo * 3_600L
+        if (timestamp !in viewportStartTimeSeconds..viewportEndTimeSeconds) return@mapNotNull null
+        RelativeTimeAxisTick(
+            position = ((timestamp - viewportStartTimeSeconds).toFloat() / viewportSeconds)
+                .coerceIn(0f, 1f),
+            label = "$hoursAgo hrs ago",
+        )
+    }.toMutableList()
+
+    if (viewportEndTimeSeconds == historyEndTimeSeconds) {
+        ticks += RelativeTimeAxisTick(
+            position = 1f,
+            label = formatChartTimestamp(historyEndTimeSeconds, timeFormat),
+        )
+    }
+    return ticks.sortedBy(RelativeTimeAxisTick::position)
+}
+
 private fun formatDebugTimestamp(timestampSeconds: Long): String {
     return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(timestampSeconds * 1000L))
 }
 
-private fun formatBasalAxisLabel(unitsPerHour: Double): String {
-    return "${String.format(Locale.US, "%.1f", unitsPerHour).trimEnd('0').trimEnd('.')}u"
-}
-
 private const val BASAL_LOOKBACK_SECONDS = 30L * 60L
+internal const val BASAL_QUERY_CUTOFF_BUCKET_SECONDS = 5L * 60L
+
+private val BASAL_HISTORY_LOG_CLASSES = listOf(
+    BasalDeliveryHistoryLog::class.java,
+    BasalRateChangeHistoryLog::class.java,
+    TempRateActivatedHistoryLog::class.java,
+    TempRateCompletedHistoryLog::class.java,
+    PumpingSuspendedHistoryLog::class.java,
+    PumpingResumedHistoryLog::class.java,
+    HypoMinimizerSuspendHistoryLog::class.java,
+    HypoMinimizerResumeHistoryLog::class.java,
+    DailyBasalHistoryLog::class.java,
+)
+
+internal fun basalHistoryQueryCutoff(
+    minimumPumpTimeSeconds: Long,
+    bucketSeconds: Long = BASAL_QUERY_CUTOFF_BUCKET_SECONDS,
+): Long {
+    require(bucketSeconds > 0L) { "Basal query bucket must be positive" }
+    return Math.floorDiv(minimumPumpTimeSeconds, bucketSeconds) * bucketSeconds
+}
 
 internal fun snapTimestampToBucket(
     timestampSeconds: Long,
@@ -191,6 +242,41 @@ internal fun snapTimestampToBucket(
         .roundToLong()
         .coerceIn(0L, (bucketCount - 1).toLong())
     return startTimeSeconds + (bucketIndex * bucketSeconds)
+}
+
+internal fun timestampToContainingBucket(
+    timestampSeconds: Long,
+    startTimeSeconds: Long,
+    bucketSeconds: Long,
+    bucketCount: Int,
+): Long {
+    require(bucketSeconds > 0L) { "Bucket duration must be positive" }
+    require(bucketCount > 0) { "At least one bucket is required" }
+    val bucketIndex = ((timestampSeconds - startTimeSeconds) / bucketSeconds)
+        .coerceIn(0L, (bucketCount - 1).toLong())
+    return startTimeSeconds + bucketIndex * bucketSeconds
+}
+
+internal fun cgmBucketTimestampsCoveredByBolusPills(
+    cgmTimestamps: List<Long>,
+    startTimeSeconds: Long,
+    bucketSeconds: Long,
+    bucketCount: Int,
+    neighborRadius: Int = 1,
+): Set<Long> {
+    require(neighborRadius >= 0) { "Neighbor radius cannot be negative" }
+    return cgmTimestamps.flatMapTo(linkedSetOf()) { timestamp ->
+        val centerTimestamp = timestampToContainingBucket(
+            timestampSeconds = timestamp,
+            startTimeSeconds = startTimeSeconds,
+            bucketSeconds = bucketSeconds,
+            bucketCount = bucketCount,
+        )
+        val centerIndex = ((centerTimestamp - startTimeSeconds) / bucketSeconds).toInt()
+        ((centerIndex - neighborRadius).coerceAtLeast(0)..
+            (centerIndex + neighborRadius).coerceAtMost(bucketCount - 1))
+            .map { index -> startTimeSeconds + index * bucketSeconds }
+    }
 }
 
 data class BolusEvent(
@@ -215,6 +301,76 @@ private data class BasalChartData(
     val sampleFailureSeqIds: List<Long>,
     val rawEntries: List<BasalHistoryDebugEntry>
 )
+
+internal enum class BasalHistoryLoadSource {
+    INVALID_PUMP,
+    LOADING,
+    LIVE,
+    LIVE_EMPTY,
+    RETAINED_WHILE_LOADING,
+    MISMATCHED_OBSERVATION,
+}
+
+internal data class RetainedBasalHistory(
+    val pumpSid: Int,
+    val items: List<HistoryLogItem>,
+)
+
+internal data class BasalHistorySelection(
+    val items: List<HistoryLogItem>,
+    val retained: RetainedBasalHistory?,
+    val source: BasalHistoryLoadSource,
+)
+
+internal fun selectBasalHistory(
+    currentPumpSid: Int,
+    observedItems: List<HistoryLogItem>?,
+    retained: RetainedBasalHistory?,
+): BasalHistorySelection {
+    if (currentPumpSid < 0) {
+        return BasalHistorySelection(
+            items = emptyList(),
+            retained = null,
+            source = BasalHistoryLoadSource.INVALID_PUMP,
+        )
+    }
+
+    val retainedForPump = retained?.takeIf { it.pumpSid == currentPumpSid }
+    if (observedItems == null) {
+        return if (retainedForPump != null) {
+            BasalHistorySelection(
+                items = retainedForPump.items,
+                retained = retainedForPump,
+                source = BasalHistoryLoadSource.RETAINED_WHILE_LOADING,
+            )
+        } else {
+            BasalHistorySelection(
+                items = emptyList(),
+                retained = null,
+                source = BasalHistoryLoadSource.LOADING,
+            )
+        }
+    }
+
+    if (observedItems.any { it.pumpSid != currentPumpSid }) {
+        return BasalHistorySelection(
+            items = retainedForPump?.items ?: emptyList(),
+            retained = retainedForPump,
+            source = BasalHistoryLoadSource.MISMATCHED_OBSERVATION,
+        )
+    }
+
+    val completed = RetainedBasalHistory(currentPumpSid, observedItems)
+    return BasalHistorySelection(
+        items = observedItems,
+        retained = completed,
+        source = if (observedItems.isEmpty()) {
+            BasalHistoryLoadSource.LIVE_EMPTY
+        } else {
+            BasalHistoryLoadSource.LIVE
+        },
+    )
+}
 
 private data class BasalHistoryDebugEntry(
     val seqId: Long,
@@ -249,7 +405,14 @@ internal fun hoveredChartTimestampFromTargets(
 }
 
 internal fun formatBasalRate(rate: Float): String {
-    return "${String.format(Locale.US, "%.2f", rate).trimEnd('0').trimEnd('.')}u/hr"
+    return "${formatBasalRateValue(rate)} u/hr"
+}
+
+internal fun formatBasalRateValue(rate: Float): String {
+    if (rate == 0f) return "0.0"
+    return String.format(Locale.US, "%.2f", rate)
+        .trimEnd('0')
+        .let { value -> if (value.endsWith('.')) "${value}0" else value }
 }
 
 private fun formatHoverGlucoseLabel(
@@ -288,17 +451,21 @@ internal fun hoverTimestampForPosition(
     )
 }
 
-internal fun BasalDeliveryHistoryLog.toBasalDataPoint(): BasalDataPoint? {
+internal fun BasalDeliveryHistoryLog.toBasalDataPoint(
+    timeline: PumpChartTimeline = PumpChartTimeline.Empty,
+): BasalDataPoint? {
     val commandedRateUnits = commandedRate / 1000f
     return BasalDataPoint(
-        timestamp = toChartTimestampSeconds(),
+        timestamp = toChartTimestampSeconds(timeline),
         rate = commandedRateUnits,
         isTemp = tempRate > 0,
         duration = null
     )
 }
 
-internal fun BasalRateChangeHistoryLog.toBasalDataPoint(): BasalDataPoint? {
+internal fun BasalRateChangeHistoryLog.toBasalDataPoint(
+    timeline: PumpChartTimeline = PumpChartTimeline.Empty,
+): BasalDataPoint? {
     val effectiveRate = when (getChangeType()) {
         BasalRateChangeHistoryLog.ChangeType.TIMED_SEGMENT,
         BasalRateChangeHistoryLog.ChangeType.NEW_PROFILE,
@@ -319,7 +486,7 @@ internal fun BasalRateChangeHistoryLog.toBasalDataPoint(): BasalDataPoint? {
     if (effectiveRate < 0f) return null
 
     return BasalDataPoint(
-        timestamp = toChartTimestampSeconds(),
+        timestamp = toChartTimestampSeconds(timeline),
         rate = effectiveRate,
         isTemp = getChangeType() == BasalRateChangeHistoryLog.ChangeType.TEMP_RATE_START,
         duration = null
@@ -360,6 +527,8 @@ data class ChartPreviewData(
     val basalDataPoints: List<BasalDataPoint> = emptyList(),
     val carbEvents: List<CarbEvent> = emptyList(),
     val modeEvents: List<ModeEvent> = emptyList(),
+    val pumpTimeChanges: List<PumpTimeChangeMarker> = emptyList(),
+    val controlIqEnabled: Boolean? = null,
     val currentTimeSeconds: Long? = null
 )
 
@@ -373,26 +542,181 @@ private data class ChartSeries(
     val yValues: List<Double>  // Y-axis values (glucose or basal rate)
 )
 
-private const val BOLUS_MARKER_DIAMETER_DP = 12f
-private const val BOLUS_MARKER_STROKE_DP = 2f
-private const val BOLUS_LABEL_TEXT_SIZE_SP = 12f
-private const val CARB_MARKER_SIZE_DP = 14f
-private const val CARB_MARKER_CORNER_RADIUS_DP = 3f
-private const val CARB_MARKER_STROKE_DP = 2f
-private const val CARB_LABEL_TEXT_SIZE_SP = 12f
-private const val CGM_CHART_HEIGHT_DP = 240
-private const val BASAL_CHART_HEIGHT_DP = 90
-private const val CHART_Y_AXIS_WIDTH_DP = 40
+internal enum class CgmDotRange {
+    IN_RANGE,
+    ABOVE_UPPER_LIMIT,
+    BELOW_LOWER_LIMIT,
+}
 
-private data class BolusMarkerPoint(
-    val markerTimestamp: Long,  // Snapped chart X position (timestamp in seconds)
-    val event: BolusEvent
+private data class StyledCgmSeries(
+    val range: CgmDotRange,
+    val series: ChartSeries,
 )
 
-private data class CarbMarkerPoint(
-    val markerTimestamp: Long,  // Snapped chart X position (timestamp in seconds)
-    val event: CarbEvent
+internal fun cgmDotRange(
+    glucoseMgdl: Double,
+    settings: GraphDisplayPreferences,
+): CgmDotRange = when {
+    settings.colorDotsAboveUpperLimit && glucoseMgdl > settings.upperThresholdMgdl ->
+        CgmDotRange.ABOVE_UPPER_LIMIT
+    settings.colorDotsBelowLowerLimit && glucoseMgdl < settings.lowerThresholdMgdl ->
+        CgmDotRange.BELOW_LOWER_LIMIT
+    else -> CgmDotRange.IN_RANGE
+}
+
+internal fun isRenderableCgmValue(
+    glucoseMgdl: Double,
+    minimumGlucoseMgdl: Float,
+    maximumGlucoseMgdl: Float,
+): Boolean = glucoseMgdl.isFinite() &&
+    glucoseMgdl > minimumGlucoseMgdl.toDouble() &&
+    glucoseMgdl < maximumGlucoseMgdl.toDouble()
+
+internal const val CGM_CHART_HEIGHT_DP = 240
+private const val BASAL_CHART_HEIGHT_DP = 72
+private const val COVER_BASAL_CHART_HEIGHT_DP = 56
+private const val TIME_CHANGE_EVENT_LANE_HEIGHT_DP = 24
+private const val CHART_Y_AXIS_LABEL_HEIGHT_DP = 12
+private const val CHART_Y_AXIS_LABEL_WIDTH_DP = 22
+private const val CHART_Y_AXIS_LABEL_GAP_DP = 2f
+private const val CHART_EDGE_TICK_INTERVAL_MGDL = 50
+private const val CHART_EDGE_TICK_LENGTH_DP = 4f
+private const val CHART_EDGE_TICK_STROKE_DP = 1f
+private const val CHART_EDGE_MINOR_TICK_LENGTH_DP = 2.5f
+private const val CHART_EDGE_MINOR_TICK_STROKE_DP = 0.75f
+private const val CHART_EDGE_MINOR_TICK_ALPHA = 0.42f
+private const val CGM_DOT_RADIUS_DP = 2.15f
+private const val CGM_DOT_OUTLINE_STROKE_DP = 1f
+private const val MAX_CLOCK_CHANGE_HISTORY_RECORDS = 256
+// The 17 dp half-width of a bolus bubble is the widest edge marker. A 20 dp gutter
+// preserves a small safety margin while maximizing the usable four-hour timeline.
+internal const val CHART_MARKER_GUTTER_DP = 20f
+
+internal fun chartTimelineWidth(
+    containerWidth: Float,
+    horizontalGutter: Float = CHART_MARKER_GUTTER_DP,
+): Float = (containerWidth - horizontalGutter * 2f).coerceAtLeast(0f)
+
+internal fun chartTimelineX(
+    fraction: Float,
+    containerWidth: Float,
+    horizontalGutter: Float = CHART_MARKER_GUTTER_DP,
+): Float = horizontalGutter + chartTimelineWidth(containerWidth, horizontalGutter) *
+    fraction.coerceIn(0f, 1f)
+
+internal fun cgmYAxisLabelValuesMgdl(): List<Int> = listOf(400, 200, 150, 100, 50)
+
+internal fun glucoseAxisTickValues(
+    minimumGlucoseMgdl: Float,
+    maximumGlucoseMgdl: Float,
+    intervalMgdl: Int = CHART_EDGE_TICK_INTERVAL_MGDL,
+): List<Float> {
+    if (
+        !minimumGlucoseMgdl.isFinite() ||
+        !maximumGlucoseMgdl.isFinite() ||
+        maximumGlucoseMgdl < minimumGlucoseMgdl ||
+        intervalMgdl <= 0
+    ) {
+        return emptyList()
+    }
+
+    val firstTick = ceil(minimumGlucoseMgdl / intervalMgdl).toInt() * intervalMgdl
+    val lastTick = floor(maximumGlucoseMgdl / intervalMgdl).toInt() * intervalMgdl
+    if (firstTick > lastTick) return emptyList()
+
+    return (firstTick..lastTick step intervalMgdl).map(Int::toFloat)
+}
+
+internal fun glucoseAxisMinorTickValues(
+    minimumGlucoseMgdl: Float,
+    maximumGlucoseMgdl: Float,
+): List<Float> = glucoseAxisTickValues(
+    minimumGlucoseMgdl = minimumGlucoseMgdl,
+    maximumGlucoseMgdl = maximumGlucoseMgdl,
+    intervalMgdl = CHART_EDGE_TICK_INTERVAL_MGDL / 2,
+).filter { glucoseMgdl ->
+    glucoseMgdl.toInt() % CHART_EDGE_TICK_INTERVAL_MGDL != 0
+}
+
+internal data class CompactGlucoseScale(
+    val minimumMgdl: Float,
+    val maximumMgdl: Float,
+    val chartHeightDp: Int,
 )
+
+/**
+ * Identity for Vico's invisible interaction chart. The visible chart is rendered by the app's
+ * Canvas overlays, but Vico retains its own bitmap-backed model for drag-marker hit testing.
+ * Reusing that model across a full/cover resize can briefly combine the previous data transform
+ * with the new layer bounds and make Vico sample exactly at bitmap.height.
+ */
+internal data class CgmInteractionGeometry(
+    val compactCover: Boolean,
+    val minimumMgdl: Float,
+    val maximumMgdl: Float,
+    val chartHeightDp: Int,
+)
+
+internal fun cgmInteractionGeometry(
+    compactCover: Boolean,
+    minimumMgdl: Float,
+    maximumMgdl: Float,
+    compactChartHeightDp: Int,
+): CgmInteractionGeometry = CgmInteractionGeometry(
+    compactCover = compactCover,
+    minimumMgdl = minimumMgdl,
+    maximumMgdl = maximumMgdl,
+    chartHeightDp = if (compactCover) compactChartHeightDp else CGM_CHART_HEIGHT_DP,
+)
+
+/**
+ * Keeps only Vico's transparent hit-test series away from its bitmap edges. Displayed CGM dots,
+ * threshold colors, labels, and marker readback continue to use the original glucose value.
+ */
+internal fun vicoInteractionGlucoseValue(
+    glucoseMgdl: Double,
+    minimumMgdl: Float,
+    maximumMgdl: Float,
+): Double {
+    val minimum = minimumMgdl.toDouble()
+    val maximum = maximumMgdl.toDouble()
+    val span = maximum - minimum
+    require(minimum.isFinite() && maximum.isFinite() && span > 0.0) {
+        "Vico interaction range must be finite and increasing"
+    }
+    val inset = max(1.0, span / 64.0).coerceAtMost(span / 4.0)
+    val finiteValue = glucoseMgdl.takeIf(Double::isFinite) ?: (minimum + maximum) / 2.0
+    return finiteValue.coerceIn(minimum + inset, maximum - inset)
+}
+
+/**
+ * Keeps the cover chart legible without reserving the full 30–410 mg/dL height when the
+ * most recent four hours occupy a much narrower range. Bounds stay on 50 mg/dL steps,
+ * include a half-step of breathing room, and retain at least three major intervals.
+ */
+internal fun compactGlucoseScale(valuesMgdl: List<Float>): CompactGlucoseScale {
+    val values = valuesMgdl.filter { it.isFinite() && it in 40f..400f }
+    if (values.isEmpty()) {
+        return CompactGlucoseScale(50f, 250f, 64)
+    }
+
+    var minimum = floor((values.minOrNull()!! - 25f) / 50f) * 50f
+    var maximum = ceil((values.maxOrNull()!! + 25f) / 50f) * 50f
+    minimum = minimum.coerceAtLeast(30f)
+    maximum = maximum.coerceAtMost(410f)
+
+    while (maximum - minimum < 150f) {
+        when {
+            minimum - 50f >= 30f -> minimum -= 50f
+            maximum + 50f <= 410f -> maximum += 50f
+            else -> break
+        }
+    }
+
+    val intervalCount = ceil((maximum - minimum) / 50f).toInt()
+    val heightDp = (intervalCount * 14 + 8).coerceIn(60, 104)
+    return CompactGlucoseScale(minimum, maximum, heightDp)
+}
 
 private data class BasalSeriesResult(
     val series: ChartSeries?
@@ -405,22 +729,200 @@ internal data class BasalInterval(
     val isTemp: Boolean
 )
 
+internal data class BasalRateMarkerLayout(
+    val intervalIndex: Int,
+    val text: String,
+    val leftDp: Float,
+    val topDp: Float,
+    val widthDp: Float,
+    val isZero: Boolean,
+)
+
+private const val BASAL_RATE_LABEL_HEIGHT_DP = 14f
+private const val BASAL_RATE_LABEL_GAP_DP = 2f
+private const val BASAL_RATE_LABEL_HORIZONTAL_INSET_DP = 3f
+private const val BASAL_RATE_LABEL_MINIMUM_WIDTH_DP = 24f
+private const val BASAL_RATE_LABEL_CHARACTER_WIDTH_DP = 5.5f
+private const val BASAL_RATE_EQUALITY_EPSILON = 0.0005f
+
+internal fun layoutBasalRateMarkers(
+    intervals: List<BasalInterval>,
+    startTimeSeconds: Long,
+    currentTimeSeconds: Long,
+    containerWidthDp: Float,
+    chartHeightDp: Float,
+    basalMaxUnitsPerHour: Float,
+    horizontalGutterDp: Float = CHART_MARKER_GUTTER_DP,
+): List<BasalRateMarkerLayout> {
+    if (
+        intervals.isEmpty() ||
+        currentTimeSeconds <= startTimeSeconds ||
+        containerWidthDp <= horizontalGutterDp * 2f ||
+        chartHeightDp <= 0f ||
+        basalMaxUnitsPerHour <= 0f
+    ) {
+        return emptyList()
+    }
+
+    val timelineWidthDp = containerWidthDp - horizontalGutterDp * 2f
+    val rangeSeconds = (currentTimeSeconds - startTimeSeconds).toFloat()
+    val candidates = intervals.mapIndexedNotNull { intervalIndex, interval ->
+        if (!interval.rate.isFinite() || interval.rate < 0f || interval.endTimestamp <= interval.startTimestamp) {
+            return@mapIndexedNotNull null
+        }
+
+        val priorRate = intervals.getOrNull(intervalIndex - 1)?.rate
+        val isRateChange = priorRate == null ||
+            kotlin.math.abs(interval.rate - priorRate) >= BASAL_RATE_EQUALITY_EPSILON
+        if (!isRateChange) return@mapIndexedNotNull null
+
+        val isZero = interval.rate == 0f
+        val value = formatBasalRateValue(interval.rate)
+        val text = if (intervalIndex == 0) "$value u/hr" else value
+        val labelWidthDp = max(
+            BASAL_RATE_LABEL_MINIMUM_WIDTH_DP,
+            text.length * BASAL_RATE_LABEL_CHARACTER_WIDTH_DP + 4f,
+        )
+        val startFraction = ((interval.startTimestamp - startTimeSeconds) / rangeSeconds)
+            .coerceIn(0f, 1f)
+        val desiredLeftDp = horizontalGutterDp + startFraction * timelineWidthDp +
+            BASAL_RATE_LABEL_HORIZONTAL_INSET_DP
+        val maximumLeftDp = (containerWidthDp - horizontalGutterDp - labelWidthDp)
+            .coerceAtLeast(horizontalGutterDp)
+        val leftDp = desiredLeftDp.coerceIn(horizontalGutterDp, maximumLeftDp)
+        val normalizedRate = (interval.rate / basalMaxUnitsPerHour).coerceIn(0f, 1f)
+        val desiredTopDp = if (isZero) {
+            chartHeightDp - BASAL_RATE_LABEL_HEIGHT_DP - 3f
+        } else {
+            chartHeightDp * (1f - normalizedRate) - BASAL_RATE_LABEL_HEIGHT_DP - 2f
+        }
+        BasalRateMarkerLayout(
+            intervalIndex = intervalIndex,
+            text = text,
+            leftDp = leftDp,
+            topDp = desiredTopDp.coerceIn(0f, chartHeightDp - BASAL_RATE_LABEL_HEIGHT_DP),
+            widthDp = labelWidthDp,
+            isZero = isZero,
+        )
+    }
+
+    val retained = mutableListOf<BasalRateMarkerLayout>()
+    candidates
+        .sortedWith(
+            compareByDescending<BasalRateMarkerLayout> { it.isZero }
+                .thenByDescending { it.intervalIndex },
+        )
+        .forEach { candidate ->
+            val overlapsRetained = retained.any { retainedMarker ->
+                val horizontalOverlap = candidate.leftDp <
+                    retainedMarker.leftDp + retainedMarker.widthDp + BASAL_RATE_LABEL_GAP_DP &&
+                    candidate.leftDp + candidate.widthDp + BASAL_RATE_LABEL_GAP_DP >
+                    retainedMarker.leftDp
+                val verticalOverlap = candidate.topDp <
+                    retainedMarker.topDp + BASAL_RATE_LABEL_HEIGHT_DP + BASAL_RATE_LABEL_GAP_DP &&
+                    candidate.topDp + BASAL_RATE_LABEL_HEIGHT_DP + BASAL_RATE_LABEL_GAP_DP >
+                    retainedMarker.topDp
+                horizontalOverlap && verticalOverlap
+            }
+            if (!overlapsRetained) retained += candidate
+        }
+
+    return retained.sortedBy(BasalRateMarkerLayout::intervalIndex)
+}
+
 enum class TimeRange(val label: String, val hours: Int) {
     THREE_HOURS("3h", 3),
+    FOUR_HOURS("4h", 4),
     SIX_HOURS("6h", 6),
     TWELVE_HOURS("12h", 12),
     TWENTY_FOUR_HOURS("24h", 24)
 }
 
-private fun String.toTimeRangeOrNull(): TimeRange? {
-    return TimeRange.values().firstOrNull { it.name == this }
+internal const val DASHBOARD_HISTORY_HOURS = 24
+internal const val DASHBOARD_VIEWPORT_HOURS = 4
+internal const val DASHBOARD_HISTORY_SECONDS = DASHBOARD_HISTORY_HOURS * 60L * 60L
+internal const val DASHBOARD_VIEWPORT_SECONDS = DASHBOARD_VIEWPORT_HOURS * 60L * 60L
+
+internal fun panChartViewportEndSeconds(
+    currentVisibleEndSeconds: Double,
+    horizontalDragPixels: Float,
+    viewportWidthPixels: Float,
+    historyStartSeconds: Long,
+    historyEndSeconds: Long,
+    viewportDurationSeconds: Long = DASHBOARD_VIEWPORT_SECONDS,
+): Double {
+    if (viewportWidthPixels <= 0f) return currentVisibleEndSeconds
+
+    val earliestVisibleEnd = historyStartSeconds + viewportDurationSeconds
+    val secondsPerPixel = viewportDurationSeconds.toDouble() / viewportWidthPixels.toDouble()
+    return (currentVisibleEndSeconds - horizontalDragPixels * secondsPerPixel)
+        .coerceIn(earliestVisibleEnd.toDouble(), historyEndSeconds.toDouble())
+}
+
+internal fun snapChartViewportEndSeconds(
+    visibleEndSeconds: Double,
+    historyStartSeconds: Long,
+    historyEndSeconds: Long,
+    viewportDurationSeconds: Long = DASHBOARD_VIEWPORT_SECONDS,
+    bucketSeconds: Long = 5L * 60L,
+): Double {
+    val earliestVisibleEnd = historyStartSeconds + viewportDurationSeconds
+    val distanceFromLatest = historyEndSeconds - visibleEndSeconds
+    val snappedDistance = (distanceFromLatest / bucketSeconds.toDouble()).roundToLong() * bucketSeconds
+    return (historyEndSeconds - snappedDistance).toDouble()
+        .coerceIn(earliestVisibleEnd.toDouble(), historyEndSeconds.toDouble())
+}
+
+private fun Modifier.chartViewportPan(
+    historyStartSeconds: Long,
+    historyEndSeconds: Long,
+    viewportEndState: MutableState<Double>,
+    viewportPinnedToLatestState: MutableState<Boolean>,
+    horizontalGutterDp: Float,
+    onPanStart: () -> Unit,
+    onPanFinished: () -> Unit,
+): Modifier = pointerInput(historyStartSeconds, historyEndSeconds) {
+    detectHorizontalDragGestures(
+        onDragStart = {
+            onPanStart()
+        },
+        onDragEnd = {
+            viewportEndState.value = snapChartViewportEndSeconds(
+                visibleEndSeconds = viewportEndState.value,
+                historyStartSeconds = historyStartSeconds,
+                historyEndSeconds = historyEndSeconds,
+            )
+            viewportPinnedToLatestState.value =
+                viewportEndState.value >= historyEndSeconds.toDouble()
+            onPanFinished()
+        },
+        onDragCancel = {
+            onPanFinished()
+        },
+    ) { change, horizontalDragAmount ->
+        val timelineWidth = chartTimelineWidth(
+            containerWidth = size.width.toFloat(),
+            horizontalGutter = horizontalGutterDp.dp.toPx(),
+        )
+        viewportEndState.value = panChartViewportEndSeconds(
+            currentVisibleEndSeconds = viewportEndState.value,
+            horizontalDragPixels = horizontalDragAmount,
+            viewportWidthPixels = timelineWidth,
+            historyStartSeconds = historyStartSeconds,
+            historyEndSeconds = historyEndSeconds,
+        )
+        viewportPinnedToLatestState.value =
+            viewportEndState.value >= historyEndSeconds.toDouble()
+        change.consume()
+    }
 }
 
 // Helper function to fetch and convert CGM data
 @Composable
 private fun rememberCgmChartData(
     historyLogViewModel: HistoryLogViewModel?,
-    timeRange: TimeRange
+    timeRange: TimeRange,
+    timeline: PumpChartTimeline,
 ): List<CgmDataPoint> {
     val cgmData = historyLogViewModel?.latestItemsForTypes(
         CgmReadingHistoryLogs,
@@ -428,106 +930,19 @@ private fun rememberCgmChartData(
         (timeRange.hours * 60 / 5) + 20  // Extra buffer
     )?.observeAsState(emptyList())
 
-    return remember(cgmData?.value, timeRange) {
-        cgmData?.value?.mapNotNull { dao -> dao.toCgmDataPoint() }?.reversed() ?: emptyList()
+    return remember(cgmData?.value, timeRange, timeline) {
+        cgmData?.value?.mapNotNull { dao -> dao.toCgmDataPoint(timeline) }?.reversed()
+            ?: emptyList()
     }
 }
 
-
-private fun formatBolusUnits(units: Float): String {
-    val pattern = if (units >= 1f) "%.1fU" else "%.2fU"
-    return String.format(Locale.getDefault(), pattern, units)
-}
-
-private fun formatCarbGrams(grams: Int): String {
-    return "${grams}g"
-}
-
-private fun formatBolusTooltip(units: Float, isAutomated: Boolean, timestamp: Long): String {
-    val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
-    val timeStr = timeFormat.format(Date(timestamp * 1000))
-    val typeStr = if (isAutomated) "Auto" else "Bolus"
-    val pattern = if (units >= 1f) "%.1fU" else "%.2fU"
-    val unitsStr = String.format(Locale.getDefault(), pattern, units)
-    return "$unitsStr\n$typeStr @ $timeStr"
-}
-
-private fun formatCarbTooltip(grams: Int, timestamp: Long): String {
-    val timeFormat = SimpleDateFormat("h:mm a", Locale.getDefault())
-    val timeStr = timeFormat.format(Date(timestamp * 1000))
-    return "${grams}g\n@ $timeStr"
-}
-
-private fun createBolusMarker(
-    labelComponent: TextComponent,
-    indicatorComponent: Component,
-    labelText: String
-): DefaultCartesianMarker {
-    return IndicatorOnlyPersistentMarker(
-        label = labelComponent,
-        indicator = { indicatorComponent },
-        indicatorSizeDp = BOLUS_MARKER_DIAMETER_DP
-    )
-}
-
-private fun createCarbMarker(
-    labelComponent: TextComponent,
-    indicatorComponent: Component,
-    labelText: String
-): DefaultCartesianMarker {
-    return IndicatorOnlyPersistentMarker(
-        label = labelComponent,
-        indicator = { indicatorComponent },
-        indicatorSizeDp = CARB_MARKER_SIZE_DP
-    )
-}
-
-private class IndicatorOnlyPersistentMarker(
-    label: TextComponent,
-    indicator: (Int) -> Component,
-    indicatorSizeDp: Float
-) : DefaultCartesianMarker(
-    label = label,
-    valueFormatter = DefaultCartesianMarker.ValueFormatter { _, _ -> "" },
-    labelPosition = LabelPosition.Top,
-    indicator = indicator,
-    indicatorSizeDp = indicatorSizeDp,
-    guideline = null
-) {
-    override fun drawOverLayers(
-        context: CartesianDrawingContext,
-        targets: List<CartesianMarker.Target>
-    ) {
-        with(context) {
-            val halfIndicatorSize = dpToPx(indicatorSizeDp) / 2f
-            targets.forEach { target ->
-                when (target) {
-                    is LineCartesianLayerMarkerTarget -> {
-                        // The chart has CGM and basal line series at the same X. Anchor event dots
-                        // to the topmost point only so a bolus/carb doesn't also render on basal.
-                        val point = target.points.minByOrNull { it.canvasY } ?: return@forEach
-                        drawIndicator(target.canvasX, point.canvasY, point.color, halfIndicatorSize)
-                    }
-                }
-            }
-        }
-    }
-
-    override fun updateLayerMargins(
-        context: CartesianMeasuringContext,
-        layerMargins: CartesianLayerMargins,
-        layerDimensions: CartesianLayerDimensions,
-        model: CartesianChartModel
-    ) {
-        // Indicator-only persistent markers should not reserve label space.
-    }
-}
 
 // Helper function to fetch and convert Bolus data
 @Composable
 private fun rememberBolusData(
     historyLogViewModel: HistoryLogViewModel?,
-    timeRange: TimeRange
+    timeRange: TimeRange,
+    timeline: PumpChartTimeline,
 ): BolusChartData {
     val bolusHistoryLogs = historyLogViewModel?.latestItemsForTypes(
         listOf(BolusDeliveryHistoryLog::class.java),
@@ -535,7 +950,7 @@ private fun rememberBolusData(
         (timeRange.hours * 2) + 10
     )?.observeAsState()
 
-    val bolusChartData = remember(bolusHistoryLogs?.value, timeRange) {
+    val bolusChartData = remember(bolusHistoryLogs?.value, timeRange, timeline) {
         val rawLogs = bolusHistoryLogs?.value ?: emptyList()
         val events = mutableListOf<BolusEvent>()
         var zeroUnitCount = 0
@@ -551,7 +966,7 @@ private fun rememberBolusData(
                         val bolusSource = parsed.bolusSource
                         val isAutomated = bolusSource == BolusDeliveryHistoryLog.BolusSource.CONTROL_IQ_AUTO_BOLUS
                         val bolusType = parsed.bolusTypes.toString()
-                        val timestamp = parsed.toChartTimestampSeconds()
+                        val timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec)
                         events += BolusEvent(
                             timestamp = timestamp,
                             units = units,
@@ -623,35 +1038,54 @@ private fun rememberBolusData(
 @Composable
 private fun rememberBasalData(
     historyLogViewModel: HistoryLogViewModel?,
+    currentPumpSid: Int,
     timeRange: TimeRange,
     startTimeSeconds: Long,
-    currentTimeSeconds: Long
+    currentTimeSeconds: Long,
+    currentPumpTimeSec: Long,
+    timeline: PumpChartTimeline,
 ): BasalChartData {
-    // Use all basal-related history log types so logging and charting reflect actual delivery records.
-    val basalClasses = listOf(
-        BasalDeliveryHistoryLog::class.java,
-        BasalRateChangeHistoryLog::class.java,
-        TempRateActivatedHistoryLog::class.java,
-        TempRateCompletedHistoryLog::class.java,
-        PumpingSuspendedHistoryLog::class.java,
-        PumpingResumedHistoryLog::class.java,
-        HypoMinimizerSuspendHistoryLog::class.java,
-        HypoMinimizerResumeHistoryLog::class.java,
-        DailyBasalHistoryLog::class.java
-    )
-
-    val dataStore = LocalDataStore.current
-    val currentPumpTimeSec = dataStore.timeSinceResetResponse.observeAsState().value?.currentTime
-        ?: HistoryLogViewModel.estimateCurrentPumpTimeSec()
     val rangeSeconds = currentTimeSeconds - startTimeSeconds
-    val minPumpTimeSec = currentPumpTimeSec - rangeSeconds - BASAL_LOOKBACK_SECONDS
-    val basalHistoryLogs = historyLogViewModel?.itemsForTypesSince(
-        basalClasses,
-        minPumpTimeSec
-    )?.observeAsState()
+    val minPumpTimeSec = currentPumpTimeSec - rangeSeconds - BASAL_LOOKBACK_SECONDS -
+        timeline.maximumPositiveHistoricalCorrectionSeconds()
+    val queryCutoffPumpTimeSec = basalHistoryQueryCutoff(minPumpTimeSec)
+    val basalHistoryLiveData = remember(
+        historyLogViewModel,
+        currentPumpSid,
+        queryCutoffPumpTimeSec,
+    ) {
+        historyLogViewModel?.itemsForTypesSince(
+            BASAL_HISTORY_LOG_CLASSES,
+            queryCutoffPumpTimeSec,
+        )
+    }
+    val observedBasalHistory = basalHistoryLiveData?.observeAsState()?.value
+    var retainedBasalHistory by remember { mutableStateOf<RetainedBasalHistory?>(null) }
+    val historySelection = remember(
+        currentPumpSid,
+        observedBasalHistory,
+        retainedBasalHistory,
+    ) {
+        selectBasalHistory(
+            currentPumpSid = currentPumpSid,
+            observedItems = observedBasalHistory,
+            retained = retainedBasalHistory,
+        )
+    }
+    SideEffect {
+        if (retainedBasalHistory != historySelection.retained) {
+            retainedBasalHistory = historySelection.retained
+        }
+    }
 
-    val basalChartData = remember(basalHistoryLogs?.value, timeRange, startTimeSeconds, currentTimeSeconds) {
-        val rawLogs = basalHistoryLogs?.value ?: emptyList()
+    val basalChartData = remember(
+        historySelection.items,
+        timeRange,
+        startTimeSeconds,
+        currentTimeSeconds,
+        timeline,
+    ) {
+        val rawLogs = historySelection.items
         val lookbackStartTimeSeconds = startTimeSeconds - BASAL_LOOKBACK_SECONDS
         val events = mutableListOf<BasalDataPoint>()
         val rawEntries = mutableListOf<BasalHistoryDebugEntry>()
@@ -664,80 +1098,80 @@ private fun rememberBasalData(
 
                 when (parsed) {
                     is BasalDeliveryHistoryLog -> {
-                        val timestamp = parsed.toChartTimestampSeconds()
+                        val timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec)
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
                             timestamp = timestamp,
                             details = "type=BasalDeliveryHistoryLog commandedRateSource=${parsed.commandedRateSource} commandedRate=${parsed.commandedRate} profileBasalRate=${parsed.profileBasalRate} algorithmRate=${parsed.algorithmRate} tempRate=${parsed.tempRate}"
                         )
-                        parsed.toBasalDataPoint()
+                        parsed.toBasalDataPoint(timeline)
                             ?.takeIf { it.timestamp in lookbackStartTimeSeconds..currentTimeSeconds }
                             ?.let(events::add)
                     }
                     is BasalRateChangeHistoryLog -> {
-                        val timestamp = parsed.toChartTimestampSeconds()
+                        val timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec)
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
                             timestamp = timestamp,
                             details = "type=BasalRateChangeHistoryLog changeType=${parsed.changeType} changeTypeId=${parsed.changeTypeId} commandBasalRate=${parsed.commandBasalRate} baseBasalRate=${parsed.baseBasalRate} maxBasalRate=${parsed.maxBasalRate} insulinDeliveryProfile=${parsed.insulinDeliveryProfile}"
                         )
-                        parsed.toBasalDataPoint()
+                        parsed.toBasalDataPoint(timeline)
                             ?.takeIf { it.timestamp in lookbackStartTimeSeconds..currentTimeSeconds }
                             ?.let(events::add)
                     }
                     is TempRateActivatedHistoryLog -> {
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
-                            timestamp = parsed.toChartTimestampSeconds(),
+                            timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec),
                             details = "type=TempRateActivatedHistoryLog percent=${parsed.percent} duration=${parsed.duration} tempRateId=${parsed.tempRateId}"
                         )
                     }
                     is TempRateCompletedHistoryLog -> {
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
-                            timestamp = parsed.toChartTimestampSeconds(),
+                            timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec),
                             details = "type=TempRateCompletedHistoryLog tempRateId=${parsed.tempRateId} timeLeft=${parsed.timeLeft}"
                         )
                     }
                     is PumpingSuspendedHistoryLog -> {
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
-                            timestamp = parsed.toChartTimestampSeconds(),
+                            timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec),
                             details = "type=PumpingSuspendedHistoryLog reason=${parsed.reason} reasonId=${parsed.reasonId} insulinAmount=${parsed.insulinAmount}"
                         )
                     }
                     is PumpingResumedHistoryLog -> {
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
-                            timestamp = parsed.toChartTimestampSeconds(),
+                            timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec),
                             details = "type=PumpingResumedHistoryLog insulinAmount=${parsed.insulinAmount}"
                         )
                     }
                     is HypoMinimizerSuspendHistoryLog -> {
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
-                            timestamp = parsed.toChartTimestampSeconds(),
+                            timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec),
                             details = "type=HypoMinimizerSuspendHistoryLog"
                         )
                     }
                     is HypoMinimizerResumeHistoryLog -> {
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
-                            timestamp = parsed.toChartTimestampSeconds(),
+                            timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec),
                             details = "type=HypoMinimizerResumeHistoryLog"
                         )
                     }
                     is DailyBasalHistoryLog -> {
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
-                            timestamp = parsed.toChartTimestampSeconds(),
+                            timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec),
                             details = "type=DailyBasalHistoryLog dailyTotalBasal=${parsed.dailyTotalBasal} lastBasalRate=${parsed.lastBasalRate} iob=${parsed.iob} finalEventForDay=${parsed.finalEventForDay} batteryChargeRaw=${parsed.batteryChargeRaw} lipoMv=${parsed.lipoMv}"
                         )
                     }
                     else -> {
                         rawEntries += BasalHistoryDebugEntry(
                             seqId = dao.seqId,
-                            timestamp = parsed.toChartTimestampSeconds(),
+                            timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec),
                             details = "type=${parsed.javaClass.simpleName} unexpectedForBasal=true"
                         )
                         parseFailureCount++
@@ -747,7 +1181,7 @@ private fun rememberBasalData(
             } catch (e: Exception) {
                 rawEntries += BasalHistoryDebugEntry(
                     seqId = dao.seqId,
-                    timestamp = dao.pumpTimeLocal().atZone(ZoneId.systemDefault()).toEpochSecond(),
+                    timestamp = timeline.chartTimestamp(dao.seqId, dao.pumpTimeSec),
                     details = "parseFailure=${e.javaClass.simpleName}:${e.message ?: ""}"
                 )
                 parseFailureCount++
@@ -769,9 +1203,20 @@ private fun rememberBasalData(
         )
     }
 
-    val sourceLogSignature = remember(basalChartData, timeRange) {
+    val sourceLogSignature = remember(
+        basalChartData,
+        timeRange,
+        currentPumpSid,
+        queryCutoffPumpTimeSec,
+        historySelection.source,
+        historySelection.retained?.items?.size,
+    ) {
         listOf(
             timeRange.label,
+            currentPumpSid,
+            queryCutoffPumpTimeSec,
+            historySelection.source,
+            historySelection.retained?.items?.size ?: 0,
             basalChartData.rawLogCount,
             basalChartData.events.size,
             basalChartData.parseFailureCount,
@@ -783,8 +1228,12 @@ private fun rememberBasalData(
         if (lastSourceLogSignature == sourceLogSignature) return@LaunchedEffect
         lastSourceLogSignature = sourceLogSignature
         Timber.i(
-            "VicoCgmChart basal source: range=%s leadInSeconds=%d rawLogs=%d parsedEvents=%d parseFailures=%d sampleFailureSeqIds=%s",
+            "VicoCgmChart basal source: range=%s pumpSid=%d queryCutoff=%d loadSource=%s retainedLogs=%d leadInSeconds=%d rawLogs=%d parsedEvents=%d parseFailures=%d sampleFailureSeqIds=%s",
             timeRange.label,
+            currentPumpSid,
+            queryCutoffPumpTimeSec,
+            historySelection.source,
+            historySelection.retained?.items?.size ?: 0,
             BASAL_LOOKBACK_SECONDS,
             basalChartData.rawLogCount,
             basalChartData.events.size,
@@ -807,46 +1256,12 @@ private fun rememberBasalData(
     return basalChartData
 }
 
-// Helper function to fetch and convert Carb data
-@Composable
-private fun rememberCarbData(
-    historyLogViewModel: HistoryLogViewModel?,
-    timeRange: TimeRange
-): List<CarbEvent> {
-    // Carbs are recorded in CarbEnteredHistoryLog
-    val carbHistoryLogs = historyLogViewModel?.latestItemsForTypes(
-        listOf(CarbEnteredHistoryLog::class.java),
-        (timeRange.hours * 2) + 10
-    )?.observeAsState()
-
-    return remember(carbHistoryLogs?.value, timeRange) {
-        carbHistoryLogs?.value?.mapNotNull { dao ->
-            try {
-                val parsed = dao.parse()
-                if (parsed is CarbEnteredHistoryLog) {
-                    val carbs = parsed.carbs.toInt()
-
-                    if (carbs > 0) {
-                        val timestamp = parsed.toChartTimestampSeconds()
-                        CarbEvent(
-                            timestamp = timestamp,
-                            grams = carbs,
-                            note = null
-                        )
-                    } else null
-                } else null
-            } catch (e: Exception) {
-                null
-            }
-        }?.reversed() ?: emptyList()
-    }
-}
-
 // Helper function to fetch and convert Mode data (Sleep/Exercise)
 @Composable
 private fun rememberModeData(
     historyLogViewModel: HistoryLogViewModel?,
-    timeRange: TimeRange
+    timeRange: TimeRange,
+    timeline: PumpChartTimeline,
 ): List<ModeEvent> {
     // Use ControlIQUserModeChangeHistoryLog to track mode changes
     val modeClasses = listOf(
@@ -858,7 +1273,7 @@ private fun rememberModeData(
         (timeRange.hours * 2) + 10
     )?.observeAsState()
 
-    return remember(modeHistoryLogs?.value, timeRange) {
+    return remember(modeHistoryLogs?.value, timeRange, timeline) {
         modeHistoryLogs?.value?.mapNotNull { dao: HistoryLogItem ->
             try {
                 val parsed = dao.parse()
@@ -874,17 +1289,15 @@ private fun rememberModeData(
                         else -> TherapyMode.STANDARD
                     }
 
-                    val timestamp = parsed.toChartTimestampSeconds()
+                    val timestamp = timeline.chartTimestamp(dao.seqId, parsed.pumpTimeSec)
 
-                    // Only return mode events for Sleep/Exercise activations
-                    // We don't have duration data in this history log, so use null
-                    if (mode == TherapyMode.SLEEP || mode == TherapyMode.EXERCISE) {
-                        ModeEvent(
-                            timestamp = timestamp,
-                            mode = mode,
-                            duration = null  // Duration not available in ControlIQUserModeChangeHistoryLog
-                        )
-                    } else null
+                    // Standard transitions are retained so historical target bands end at the
+                    // actual mode change instead of relying on an assumed duration.
+                    ModeEvent(
+                        timestamp = timestamp,
+                        mode = mode,
+                        duration = null,
+                    )
                 } else null
             } catch (e: Exception) {
                 null
@@ -998,21 +1411,99 @@ internal fun buildBasalIntervals(
 fun VicoCgmChart(
     historyLogViewModel: HistoryLogViewModel?,
     modifier: Modifier = Modifier,
-    timeRange: TimeRange = TimeRange.SIX_HOURS,
-    previewData: ChartPreviewData? = null
+    previewData: ChartPreviewData? = null,
+    compactCover: Boolean = false,
 ) {
     val dataStore = LocalDataStore.current
+    val context = LocalContext.current
+    val prefs = remember(context) { Prefs(context) }
     val glucoseUnit by dataStore.glucoseUnitPreference.observeAsState(GlucoseUnit.MGDL)
     val basalLimitSettings by dataStore.basalLimitSettingsResponse.observeAsState()
-
-    // Fetch all chart data
-    val currentTimeSeconds = remember(timeRange) {
-        previewData?.currentTimeSeconds ?: Instant.now().epochSecond
+    val cgmGlucoseAlertSettings by dataStore.cgmGlucoseAlertSettingsResponse.observeAsState()
+    val pumpControlIqEnabled by dataStore.controlIQEnabled.observeAsState(false)
+    val pumpClock by dataStore.timeSinceResetResponse.observeAsState()
+    val currentPumpSid by dataStore.pumpSid.observeAsState(prefs.currentPumpSid())
+    val latestHistoryItem = historyLogViewModel?.latest?.observeAsState()?.value
+    val controlIqEnabled = previewData?.controlIqEnabled ?: pumpControlIqEnabled
+    val graphDisplayPreferences = remember(context) { prefs.graphDisplayPreferences() }
+    val thresholdLines = remember(cgmGlucoseAlertSettings, graphDisplayPreferences) {
+        val cgmAlertLines = buildCgmAlertThresholdLines(
+            highEnabled = (cgmGlucoseAlertSettings?.highGlucoseAlertEnabled ?: 0) != 0,
+            highThresholdMgdl = cgmGlucoseAlertSettings?.highGlucoseAlertThreshold ?: 200,
+            lowEnabled = (cgmGlucoseAlertSettings?.lowGlucoseAlertEnabled ?: 0) != 0,
+            lowThresholdMgdl = cgmGlucoseAlertSettings?.lowGlucoseAlertThreshold ?: 80,
+        )
+        val graphDisplayLines = buildGraphDisplayThresholdLines(
+            showUpperLimitLine = graphDisplayPreferences.showUpperLimitLine,
+            upperThresholdMgdl = graphDisplayPreferences.upperThresholdMgdl,
+            showLowerLimitLine = graphDisplayPreferences.showLowerLimitLine,
+            lowerThresholdMgdl = graphDisplayPreferences.lowerThresholdMgdl,
+        )
+        combineCgmAndGraphDisplayThresholdLines(cgmAlertLines, graphDisplayLines)
     }
-    val rangeSeconds = timeRange.hours * 3600L
+
+    val clockHistoryLogs = historyLogViewModel?.latestItemsForTypes(
+        listOf(
+            TimeChangedHistoryLog::class.java,
+            DateChangeHistoryLog::class.java,
+        ),
+        MAX_CLOCK_CHANGE_HISTORY_RECORDS,
+    )?.observeAsState(emptyList())
+    val pumpTimeline = remember(clockHistoryLogs?.value) {
+        PumpChartTimeline.from(clockHistoryLogs?.value ?: emptyList())
+    }
+
+    // Anchor the graph to the pump's current wall clock. Historical clock-change records are
+    // normalized onto this continuous elapsed-time coordinate by PumpChartTimeline.
+    val replayingImportedHistory = prefs.developerPreviewEnabled() &&
+        previewData == null &&
+        latestHistoryItem != null
+    val currentPumpTimeSec = if (replayingImportedHistory) {
+        latestHistoryItem!!.pumpTimeSec
+    } else {
+        pumpClock?.currentTime ?: HistoryLogViewModel.estimateCurrentPumpTimeSec()
+    }
+    val historyEndTimeSeconds = previewData?.currentTimeSeconds
+        ?: if (replayingImportedHistory) {
+            pumpTimeline.chartTimestamp(latestHistoryItem!!.seqId, latestHistoryItem.pumpTimeSec)
+        } else {
+            pumpTimeSecToChartTimestamp(currentPumpTimeSec)
+        }
+    val historyDurationSeconds = if (compactCover) {
+        DASHBOARD_VIEWPORT_SECONDS
+    } else {
+        DASHBOARD_HISTORY_SECONDS
+    }
+    val historyStartTimeSeconds = historyEndTimeSeconds - historyDurationSeconds
+    val historyRange = if (compactCover) {
+        TimeRange.FOUR_HOURS
+    } else {
+        TimeRange.TWENTY_FOUR_HOURS
+    }
+    val viewportEndState = remember(previewData) {
+        mutableStateOf(historyEndTimeSeconds.toDouble())
+    }
+    val viewportPinnedToLatestState = remember(previewData) { mutableStateOf(true) }
+    LaunchedEffect(historyEndTimeSeconds) {
+        val earliestVisibleEnd = historyStartTimeSeconds + DASHBOARD_VIEWPORT_SECONDS
+        viewportEndState.value = if (viewportPinnedToLatestState.value) {
+            historyEndTimeSeconds.toDouble()
+        } else {
+            viewportEndState.value.coerceIn(
+                earliestVisibleEnd.toDouble(),
+                historyEndTimeSeconds.toDouble(),
+            )
+        }
+    }
+    val currentTimeSeconds = viewportEndState.value.roundToLong()
+    val rangeSeconds = DASHBOARD_VIEWPORT_SECONDS
     val startTimeSeconds = currentTimeSeconds - rangeSeconds
 
-    val cgmDataPoints = previewData?.cgmDataPoints ?: rememberCgmChartData(historyLogViewModel, timeRange)
+    val cgmDataPoints = previewData?.cgmDataPoints ?: rememberCgmChartData(
+        historyLogViewModel,
+        historyRange,
+        pumpTimeline,
+    )
     val bolusChartData = if (previewData != null) {
         BolusChartData(
             events = previewData.bolusEvents,
@@ -1022,9 +1513,15 @@ fun VicoCgmChart(
             sampleFailureSeqIds = emptyList()
         )
     } else {
-        rememberBolusData(historyLogViewModel, timeRange)
+        rememberBolusData(historyLogViewModel, historyRange, pumpTimeline)
     }
     val bolusEvents = bolusChartData.events
+    val bolusGlucoseMarkers = remember(bolusEvents, cgmDataPoints) {
+        buildBolusGlucoseMarkers(
+            bolusEvents = bolusEvents,
+            cgmDataPoints = cgmDataPoints,
+        )
+    }
     val basalChartData = if (previewData != null) {
         BasalChartData(
             events = previewData.basalDataPoints,
@@ -1036,28 +1533,103 @@ fun VicoCgmChart(
     } else {
         rememberBasalData(
             historyLogViewModel = historyLogViewModel,
-            timeRange = timeRange,
-            startTimeSeconds = startTimeSeconds,
-            currentTimeSeconds = currentTimeSeconds
+            currentPumpSid = currentPumpSid,
+            timeRange = historyRange,
+            startTimeSeconds = historyStartTimeSeconds,
+            currentTimeSeconds = historyEndTimeSeconds,
+            currentPumpTimeSec = currentPumpTimeSec,
+            timeline = pumpTimeline,
         )
     }
     val basalDataPoints = basalChartData.events
-    val carbEvents = previewData?.carbEvents ?: rememberCarbData(historyLogViewModel, timeRange)
-    val modeEvents = previewData?.modeEvents ?: rememberModeData(historyLogViewModel, timeRange)
+    val modeEvents = previewData?.modeEvents
+        ?: rememberModeData(historyLogViewModel, historyRange, pumpTimeline)
+    val pumpTimeChanges = previewData?.pumpTimeChanges ?: pumpTimeline.markers()
+    val visiblePumpTimeChanges = remember(
+        pumpTimeChanges,
+        startTimeSeconds,
+        currentTimeSeconds,
+    ) {
+        pumpTimeChanges.filter { it.timestamp in startTimeSeconds..currentTimeSeconds }
+    }
 
-    val fixedGlucoseRange = Pair(30f, 410f)
+    val visibleCgmValues = remember(
+        cgmDataPoints,
+        historyEndTimeSeconds,
+        compactCover,
+    ) {
+        if (compactCover) {
+            val coverStart = historyEndTimeSeconds - DASHBOARD_VIEWPORT_SECONDS
+            cgmDataPoints
+                .asSequence()
+                .filter { it.timestamp in coverStart..historyEndTimeSeconds }
+                .map(CgmDataPoint::value)
+                .toList()
+        } else {
+            emptyList()
+        }
+    }
+    val compactScale = remember(visibleCgmValues, compactCover) {
+        compactGlucoseScale(visibleCgmValues)
+    }
+    val fixedGlucoseRange = if (compactCover) {
+        Pair(compactScale.minimumMgdl, compactScale.maximumMgdl)
+    } else {
+        Pair(30f, 410f)
+    }
     val fixedMaxGlucose = fixedGlucoseRange.second
     val fixedMinGlucose = fixedGlucoseRange.first
     val fixedGlucoseSpan = fixedMaxGlucose - fixedMinGlucose
+    val interactionGeometry = remember(
+        compactCover,
+        fixedMinGlucose,
+        fixedMaxGlucose,
+        compactScale.chartHeightDp,
+    ) {
+        cgmInteractionGeometry(
+            compactCover = compactCover,
+            minimumMgdl = fixedMinGlucose,
+            maximumMgdl = fixedMaxGlucose,
+            compactChartHeightDp = compactScale.chartHeightDp,
+        )
+    }
+    val controlIqTargetRangeBands = remember(
+        controlIqEnabled,
+        modeEvents,
+        startTimeSeconds,
+        currentTimeSeconds,
+    ) {
+        if (controlIqEnabled) {
+            buildControlIqTargetRangeBands(
+                startTimestamp = startTimeSeconds,
+                endTimestamp = currentTimeSeconds,
+                modeEvents = modeEvents,
+            )
+        } else {
+            emptyList()
+        }
+    }
 
     val bucketSeconds = 5L * 60L
     val bucketCount = max(1, (rangeSeconds / bucketSeconds).toInt() + 1)
     val bucketTimes = List(bucketCount) { startTimeSeconds + it * bucketSeconds }
 
-    val chartBuckets = remember(cgmDataPoints, currentTimeSeconds, timeRange) {
+    val chartBuckets = remember(
+        cgmDataPoints,
+        startTimeSeconds,
+        currentTimeSeconds,
+        fixedMinGlucose,
+        fixedMaxGlucose,
+    ) {
         val values = MutableList(bucketCount) { Double.NaN }
         cgmDataPoints.forEach { point ->
-            if (point.timestamp in startTimeSeconds..currentTimeSeconds) {
+            if (point.timestamp in startTimeSeconds..currentTimeSeconds &&
+                isRenderableCgmValue(
+                    glucoseMgdl = point.value.toDouble(),
+                    minimumGlucoseMgdl = fixedMinGlucose,
+                    maximumGlucoseMgdl = fixedMaxGlucose,
+                )
+            ) {
                 val index = ((point.timestamp - startTimeSeconds) / bucketSeconds).toInt().coerceIn(0, bucketCount - 1)
                 values[index] = point.value.toDouble()
             }
@@ -1066,70 +1638,64 @@ fun VicoCgmChart(
             ChartBucket(ts, values[index].takeUnless { it.isNaN() })
         }
     }
+    val bolusPillCoveredBucketTimestamps = remember(
+        bolusGlucoseMarkers,
+        startTimeSeconds,
+        bucketSeconds,
+        bucketCount,
+    ) {
+        cgmBucketTimestampsCoveredByBolusPills(
+            cgmTimestamps = bolusGlucoseMarkers
+                .filter { it.cgmTimestamp in startTimeSeconds..currentTimeSeconds }
+                .map { it.cgmTimestamp },
+            startTimeSeconds = startTimeSeconds,
+            bucketSeconds = bucketSeconds,
+            bucketCount = bucketCount,
+        )
+    }
     val glucoseValueByTimestamp = remember(chartBuckets) {
         chartBuckets.associate { it.timestamp to it.value }
     }
 
-    // Split CGM data into segments to avoid drawing lines across gaps > 5 minutes
-    // Each segment contains explicit X (timestamp) and Y (glucose) values
-    // Using separate X,Y lists allows proper positioning on time axis
-    val cgmSegments = remember(chartBuckets, bucketTimes) {
-        val segments = mutableListOf<ChartSeries>()
-        var currentSegmentStart: Int? = null
-
-        chartBuckets.forEachIndexed { index, bucket ->
-            val hasValue = bucket.value != null
-
-            if (hasValue) {
-                // Start a new segment if we don't have one, or continue current segment
-                if (currentSegmentStart == null) {
-                    currentSegmentStart = index
-                }
+    // The CGM plot is point-only, so each color can be represented as its own Vico series.
+    // This preserves the exact five-minute X positions without drawing across gaps.
+    val styledCgmSeries = remember(chartBuckets, graphDisplayPreferences) {
+        CgmDotRange.values().mapNotNull { range ->
+            val points = chartBuckets.filter { bucket ->
+                bucket.value?.let { cgmDotRange(it, graphDisplayPreferences) == range } == true
+            }
+            if (points.isEmpty()) {
+                null
             } else {
-                // Gap detected - close current segment if exists
-                if (currentSegmentStart != null) {
-                    // Create series with explicit X (timestamps) and Y (values) for this segment
-                    val xValues = mutableListOf<Long>()
-                    val yValues = mutableListOf<Double>()
-
-                    (currentSegmentStart until index).forEach { idx ->
-                        xValues.add(bucketTimes[idx])
-                        yValues.add(chartBuckets[idx].value ?: Double.NaN)
-                    }
-
-                    if (xValues.isNotEmpty()) {
-                        segments.add(ChartSeries(xValues, yValues))
-                    }
-                    currentSegmentStart = null
-                }
+                StyledCgmSeries(
+                    range = range,
+                    series = ChartSeries(
+                        xValues = points.map { it.timestamp },
+                        yValues = points.mapNotNull { it.value },
+                    ),
+                )
             }
         }
-
-        // Close any remaining open segment
-        if (currentSegmentStart != null) {
-            val xValues = mutableListOf<Long>()
-            val yValues = mutableListOf<Double>()
-
-            (currentSegmentStart until chartBuckets.size).forEach { idx ->
-                xValues.add(bucketTimes[idx])
-                yValues.add(chartBuckets[idx].value ?: Double.NaN)
-            }
-
-            if (xValues.isNotEmpty()) {
-                segments.add(ChartSeries(xValues, yValues))
-            }
+    }
+    val vicoInteractionSeries = remember(
+        styledCgmSeries,
+        interactionGeometry,
+    ) {
+        styledCgmSeries.map { styledSeries ->
+            styledSeries.copy(
+                series = styledSeries.series.copy(
+                    yValues = styledSeries.series.yValues.map { glucoseMgdl ->
+                        vicoInteractionGlucoseValue(
+                            glucoseMgdl = glucoseMgdl,
+                            minimumMgdl = interactionGeometry.minimumMgdl,
+                            maximumMgdl = interactionGeometry.maximumMgdl,
+                        )
+                    },
+                ),
+            )
         }
-
-        segments
     }
-
-    val hasValidCgmData = cgmSegments.isNotEmpty() && cgmSegments.any { segment ->
-        segment.yValues.any { !it.isNaN() }
-    }
-    val basalMaxUnitsPerHour = remember(basalLimitSettings) {
-        val configuredMax = basalLimitSettings?.let { InsulinUnit.from1000To1(it.basalLimit).toDouble() }
-        (configuredMax ?: 5.0).coerceAtLeast(1.0)
-    }
+    val hasValidCgmData = styledCgmSeries.isNotEmpty()
     val basalSeriesResult = remember(bucketTimes, basalDataPoints) {
         buildBasalSeries(bucketTimes, basalDataPoints)
     }
@@ -1140,7 +1706,6 @@ fun VicoCgmChart(
     ) {
         basalChartData.rawEntries.filter { it.timestamp in startTimeSeconds..currentTimeSeconds }
     }
-    val hasBasalSeries = basalSeriesResult.series != null
     var hoveredChartTimestamp by remember { mutableStateOf<Long?>(null) }
     var hoveredChartCanvasX by remember { mutableStateOf<Float?>(null) }
     var hoverDrivenByBasal by remember { mutableStateOf(false) }
@@ -1149,6 +1714,12 @@ fun VicoCgmChart(
     }
     val basalIntervals = remember(startTimeSeconds, currentTimeSeconds, basalDataPoints) {
         buildBasalIntervals(startTimeSeconds, currentTimeSeconds, basalDataPoints)
+    }
+    val basalMaxUnitsPerHour = remember(basalLimitSettings) {
+        val configuredMax = basalLimitSettings?.let {
+            InsulinUnit.from1000To1(it.basalLimit).toDouble()
+        }
+        (configuredMax ?: 5.0).coerceAtLeast(1.0)
     }
     val hoveredGlucoseLabel = remember(hoveredChartTimestamp, glucoseValueByTimestamp, glucoseUnit) {
         hoveredChartTimestamp?.let { timestamp ->
@@ -1167,14 +1738,13 @@ fun VicoCgmChart(
         }
     }
     val basalRenderLogSignature = remember(
-        timeRange,
         startTimeSeconds,
         currentTimeSeconds,
         basalDataPoints,
         basalSeriesResult
     ) {
         buildString {
-            append(timeRange.label)
+            append("${DASHBOARD_VIEWPORT_HOURS}h")
             append('|')
             append(startTimeSeconds)
             append('|')
@@ -1197,7 +1767,7 @@ fun VicoCgmChart(
         lastBasalRenderLogSignature = basalRenderLogSignature
         Timber.i(
             "VicoCgmChart basal render: range=%s window=%d..%d totalEvents=%d columnPoints=%d",
-            timeRange.label,
+            "${DASHBOARD_VIEWPORT_HOURS}h",
             startTimeSeconds,
             currentTimeSeconds,
             basalDataPoints.size,
@@ -1225,13 +1795,12 @@ fun VicoCgmChart(
         }
     }
     val basalHistoryLogSignature = remember(
-        timeRange,
         startTimeSeconds,
         currentTimeSeconds,
         visibleBasalHistoryEntries
     ) {
         buildString {
-            append(timeRange.label)
+            append("${DASHBOARD_VIEWPORT_HOURS}h")
             append('|')
             append(startTimeSeconds)
             append('|')
@@ -1252,7 +1821,7 @@ fun VicoCgmChart(
         lastBasalHistoryLogSignature = basalHistoryLogSignature
         Timber.i(
             "VicoCgmChart basal history: range=%s window=%d..%d visibleRawLogs=%d",
-            timeRange.label,
+            "${DASHBOARD_VIEWPORT_HOURS}h",
             startTimeSeconds,
             currentTimeSeconds,
             visibleBasalHistoryEntries.size
@@ -1269,71 +1838,9 @@ fun VicoCgmChart(
         }
     }
 
-    val circleShape = remember { CircleShape.toVicoShape() }
-    val bolusLabelColor = MaterialTheme.colorScheme.onSurface
-    val bolusLabelComponent = remember(bolusLabelColor) {
-        TextComponent(
-            color = bolusLabelColor.toArgb(),
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD),
-            textSizeSp = BOLUS_LABEL_TEXT_SIZE_SP,
-            textAlignment = Layout.Alignment.ALIGN_CENTER,
-            lineHeightSp = null,
-            lineCount = 1,
-            truncateAt = null,
-            margins = Insets(0f, 0f, 0f, 4f),
-            padding = Insets(6f, 2f, 6f, 2f),
-            background = null,
-            minWidth = TextComponent.MinWidth.Companion.fixed(0f)
-        )
-    }
-
-    val manualIndicatorComponent = rememberShapeComponent(
-        fill(InsulinColors.Bolus),
-        circleShape,
-        Insets(),
-        fill(ComposeColor.White),
-        BOLUS_MARKER_STROKE_DP.dp,
-        null
-    )
-    val autoIndicatorComponent = rememberShapeComponent(
-        fill(InsulinColors.AutoBolus),
-        circleShape,
-        Insets(),
-        fill(ComposeColor.White),
-        BOLUS_MARKER_STROKE_DP.dp,
-        null
-    )
-
-    // Carb marker components (orange rounded square)
-    val carbRoundedSquareShape = remember { RoundedCornerShape(CARB_MARKER_CORNER_RADIUS_DP.dp).toVicoShape() }
-    val carbLabelComponent = remember(bolusLabelColor) {
-        TextComponent(
-            color = bolusLabelColor.toArgb(),
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD),
-            textSizeSp = CARB_LABEL_TEXT_SIZE_SP,
-            textAlignment = Layout.Alignment.ALIGN_CENTER,
-            lineHeightSp = null,
-            lineCount = 1,
-            truncateAt = null,
-            margins = Insets(0f, 0f, 0f, 4f),
-            padding = Insets(6f, 2f, 6f, 2f),
-            background = null,
-            minWidth = TextComponent.MinWidth.Companion.fixed(0f)
-        )
-    }
-    val carbIndicatorComponent = rememberShapeComponent(
-        fill(CarbColor),
-        carbRoundedSquareShape,
-        Insets(),
-        fill(ComposeColor.White),
-        CARB_MARKER_STROKE_DP.dp,
-        null
-    )
-
-    // Separate model producers keep the CGM/bolus chart and the basal chart aligned on X
-    // while allowing each chart to have its own Y range.
-    val cgmModelProducer = remember { CartesianChartModelProducer() }
-    val basalModelProducer = remember { CartesianChartModelProducer() }
+    // A producer owns transformation state used by Vico's bitmap-backed marker lookup. Never carry
+    // it across a full/cover geometry or compact-range change.
+    val cgmModelProducer = remember(interactionGeometry) { CartesianChartModelProducer() }
 
     val axisTimeFormatter = remember {
         SimpleDateFormat("h:mm a", Locale.getDefault())
@@ -1403,101 +1910,88 @@ fun VicoCgmChart(
             }
         }
     }
-    val axisLabels = remember(startTimeSeconds, currentTimeSeconds) {
-        val offsets = listOf(0L, rangeSeconds / 2, rangeSeconds)
-        offsets.map { offset ->
-            val ts = startTimeSeconds + offset
-            axisTimeFormatter.format(Date(ts * 1000))
-        }
+    val axisTicks = remember(
+        historyEndTimeSeconds,
+        startTimeSeconds,
+        currentTimeSeconds,
+    ) {
+        relativeTimeAxisTicks(
+            historyEndTimeSeconds = historyEndTimeSeconds,
+            viewportStartTimeSeconds = startTimeSeconds,
+            viewportEndTimeSeconds = currentTimeSeconds,
+            timeFormat = axisTimeFormatter,
+        )
     }
 
-    LaunchedEffect(cgmSegments, hasValidCgmData) {
-        if (hasValidCgmData && cgmSegments.isNotEmpty()) {
+    LaunchedEffect(cgmModelProducer, vicoInteractionSeries, hasValidCgmData) {
+        if (hasValidCgmData && vicoInteractionSeries.isNotEmpty()) {
             cgmModelProducer.runTransaction {
                 lineSeries {
-                    cgmSegments.forEach { segment ->
-                        series(segment.xValues, segment.yValues)
+                    vicoInteractionSeries.forEach { styledSeries ->
+                        series(styledSeries.series.xValues, styledSeries.series.yValues)
                     }
                 }
             }
         }
     }
-    LaunchedEffect(basalSeriesResult, hasBasalSeries) {
-        if (hasBasalSeries) {
-            basalModelProducer.runTransaction {
-                columnSeries {
-                    basalSeriesResult.series?.let { basalSeries ->
-                        series(basalSeries.xValues, basalSeries.yValues)
-                    }
-                }
-            }
-        }
-    }
-
     if (cgmDataPoints.isEmpty() || !hasValidCgmData) {
         // Show placeholder when no data
         Text(
             text = "CGM data unavailable",
-            modifier = modifier.fillMaxWidth().height(300.dp),
+            modifier = modifier
+                .fillMaxWidth()
+                .height(if (compactCover) 120.dp else 300.dp),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
     } else {
-        val yAxisLabels = remember(fixedGlucoseRange, glucoseUnit) {
-            val mgdlValues = listOf(400, 360, 320, 280, 240, 200, 160, 120, 80, 40)
-            val sparseIndices = setOf(0, 3, 5, 6, 7, 8, 9) // indices to show labels for
-            when (glucoseUnit) {
-                GlucoseUnit.MGDL -> mgdlValues.mapIndexed { i, v ->
-                    if (i in sparseIndices) "$v" else " "
-                }
-                GlucoseUnit.MMOL -> mgdlValues.mapIndexed { i, v ->
-                    if (i in sparseIndices) String.format("%.1f", v * GlucoseConverter.MGDL_TO_MMOL_FACTOR) else " "
-                }
-            }
-        }
-        val basalYAxisLabels = remember(basalMaxUnitsPerHour) {
-            listOf(
-                formatBasalAxisLabel(basalMaxUnitsPerHour),
-                formatBasalAxisLabel(basalMaxUnitsPerHour / 2.0),
-                formatBasalAxisLabel(0.0)
-            )
-        }
-
-        // Create persistent markers for bolus events
-        // Use actual timestamps as X positions for markers
-        val bolusMarkerPoints = remember(bolusEvents, startTimeSeconds, currentTimeSeconds, hasValidCgmData) {
-            if (bolusEvents.isEmpty() || !hasValidCgmData) {
-                emptyList<BolusMarkerPoint>()
+        val yAxisLabels = remember(
+            glucoseUnit,
+            compactCover,
+            fixedMinGlucose,
+            fixedMaxGlucose,
+        ) {
+            val labelValues = if (compactCover) {
+                glucoseAxisTickValues(fixedMinGlucose, fixedMaxGlucose).map(Float::toInt)
             } else {
-                bolusEvents.mapNotNull { bolus ->
-                    // Only include boluses within the time range
-                    if (bolus.timestamp in startTimeSeconds..currentTimeSeconds) {
-                        BolusMarkerPoint(
-                            markerTimestamp = snapTimestampToBucket(
-                                timestampSeconds = bolus.timestamp,
-                                startTimeSeconds = startTimeSeconds,
-                                bucketSeconds = bucketSeconds,
-                                bucketCount = bucketCount
-                            ),
-                            event = bolus
-                        )
-                    } else {
-                        null
-                    }
+                cgmYAxisLabelValuesMgdl()
+            }
+            labelValues.map { glucoseMgdl ->
+                glucoseMgdl.toFloat() to when (glucoseUnit) {
+                    GlucoseUnit.MGDL -> "$glucoseMgdl"
+                    GlucoseUnit.MMOL -> String.format(
+                        "%.1f",
+                        glucoseMgdl * GlucoseConverter.MGDL_TO_MMOL_FACTOR,
+                    )
                 }
             }
         }
-        val renderLogSignature = remember(
-            bolusMarkerPoints,
+        val bolusTimelineMarkers = remember(
             bolusEvents,
             startTimeSeconds,
             currentTimeSeconds,
             hasValidCgmData,
-            timeRange
+        ) {
+            if (hasValidCgmData) {
+                layoutBolusTimelineMarkers(
+                    events = bolusEvents,
+                    startTimestamp = startTimeSeconds,
+                    endTimestamp = currentTimeSeconds,
+                )
+            } else {
+                emptyList()
+            }
+        }
+        val renderLogSignature = remember(
+            bolusTimelineMarkers,
+            bolusEvents,
+            startTimeSeconds,
+            currentTimeSeconds,
+            hasValidCgmData,
         ) {
             buildString {
-                append(timeRange.label)
+                append("${DASHBOARD_VIEWPORT_HOURS}h")
                 append('|')
                 append(hasValidCgmData)
                 append('|')
@@ -1507,10 +2001,10 @@ fun VicoCgmChart(
                 append('|')
                 append(bolusEvents.size)
                 append('|')
-                append(bolusMarkerPoints.size)
+                append(bolusTimelineMarkers.size)
                 append('|')
-                append(bolusMarkerPoints.take(5).joinToString(";") {
-                    "${it.event.timestamp}->${it.markerTimestamp}:${it.event.units}"
+                append(bolusTimelineMarkers.take(5).joinToString(";") {
+                    "${it.event.timestamp}:${it.event.units}:lane${it.lane}"
                 })
             }
         }
@@ -1520,275 +2014,202 @@ fun VicoCgmChart(
             lastRenderLogSignature = renderLogSignature
             Timber.i(
                 "VicoCgmChart bolus render: range=%s hasValidCgmData=%s window=%d..%d totalEvents=%d visibleMarkers=%d",
-                timeRange.label,
+                "${DASHBOARD_VIEWPORT_HOURS}h",
                 hasValidCgmData,
                 startTimeSeconds,
                 currentTimeSeconds,
                 bolusEvents.size,
-                bolusMarkerPoints.size
+                bolusTimelineMarkers.size
             )
-            bolusMarkerPoints.take(5).forEachIndexed { index, markerPoint ->
+            bolusTimelineMarkers.take(5).forEachIndexed { index, marker ->
                 Timber.i(
-                    "VicoCgmChart bolus marker[%d]: eventTs=%d (%s) markerTs=%d (%s) units=%.3f auto=%s type=%s",
+                    "VicoCgmChart bolus marker[%d]: eventTs=%d (%s) fraction=%.3f lane=%d units=%.3f auto=%s type=%s",
                     index,
-                    markerPoint.event.timestamp,
-                    formatDebugTimestamp(markerPoint.event.timestamp),
-                    markerPoint.markerTimestamp,
-                    formatDebugTimestamp(markerPoint.markerTimestamp),
-                    markerPoint.event.units,
-                    markerPoint.event.isAutomated,
-                    markerPoint.event.bolusType
+                    marker.event.timestamp,
+                    formatDebugTimestamp(marker.event.timestamp),
+                    marker.anchorFraction,
+                    marker.lane,
+                    marker.event.units,
+                    marker.event.isAutomated,
+                    marker.event.bolusType
                 )
             }
         }
-        
-        // Enhanced label component for detailed tooltips (multi-line)
-        val detailedBolusLabelComponent = remember(bolusLabelColor) {
-            TextComponent(
-                color = bolusLabelColor.toArgb(),
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD),
-                textSizeSp = 10f,  // Slightly smaller for multi-line
-                textAlignment = Layout.Alignment.ALIGN_CENTER,
-                lineHeightSp = null,
-                lineCount = 2,  // Allow 2 lines
-                truncateAt = null,
-                margins = Insets(0f, 0f, 0f, 4f),
-                padding = Insets(6f, 2f, 6f, 2f),
-                background = null,
-                minWidth = TextComponent.MinWidth.Companion.fixed(0f)
-            )
-        }
 
-        val detailedCarbLabelComponent = remember(bolusLabelColor) {
-            TextComponent(
-                color = bolusLabelColor.toArgb(),
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD),
-                textSizeSp = 10f,
-                textAlignment = Layout.Alignment.ALIGN_CENTER,
-                lineHeightSp = null,
-                lineCount = 2,
-                truncateAt = null,
-                margins = Insets(0f, 0f, 0f, 4f),
-                padding = Insets(6f, 2f, 6f, 2f),
-                background = null,
-                minWidth = TextComponent.MinWidth.Companion.fixed(0f)
-            )
-        }
-
-        val bolusMarkers = remember(
-            bolusMarkerPoints,
-            detailedBolusLabelComponent,
-            manualIndicatorComponent,
-            autoIndicatorComponent
-        ) {
-            bolusMarkerPoints.map { markerPoint ->
-                val indicator = if (markerPoint.event.isAutomated) {
-                    autoIndicatorComponent
-                } else {
-                    manualIndicatorComponent
-                }
-                val marker = createBolusMarker(
-                    labelComponent = detailedBolusLabelComponent,
-                    indicatorComponent = indicator,
-                    labelText = formatBolusTooltip(
-                        markerPoint.event.units,
-                        markerPoint.event.isAutomated,
-                        markerPoint.event.timestamp
-                    )
-                )
-                markerPoint.markerTimestamp.toDouble() to marker
-            }
-        }
-
-        // Create carb marker points
-        val carbMarkerPoints = remember(carbEvents, startTimeSeconds, currentTimeSeconds, hasValidCgmData) {
-            if (carbEvents.isEmpty() || !hasValidCgmData) {
-                emptyList<CarbMarkerPoint>()
-            } else {
-                carbEvents.mapNotNull { carb ->
-                    if (carb.timestamp in startTimeSeconds..currentTimeSeconds) {
-                        CarbMarkerPoint(
-                            markerTimestamp = snapTimestampToBucket(
-                                timestampSeconds = carb.timestamp,
-                                startTimeSeconds = startTimeSeconds,
-                                bucketSeconds = bucketSeconds,
-                                bucketCount = bucketCount
-                            ),
-                            event = carb
-                        )
-                    } else {
-                        null
-                    }
-                }
-            }
-        }
-
-        val carbMarkers = remember(
-            carbMarkerPoints,
-            detailedCarbLabelComponent,
-            carbIndicatorComponent
-        ) {
-            carbMarkerPoints.map { markerPoint ->
-                val marker = createCarbMarker(
-                    labelComponent = detailedCarbLabelComponent,
-                    indicatorComponent = carbIndicatorComponent,
-                    labelText = formatCarbTooltip(markerPoint.event.grams, markerPoint.event.timestamp)
-                )
-                markerPoint.markerTimestamp.toDouble() to marker
-            }
-        }
-
-        val persistentMarkers = remember(bolusMarkers, carbMarkers) {
-            if (bolusMarkers.isEmpty() && carbMarkers.isEmpty()) {
-                null
-            } else {
-                { scope: PersistentMarkerScope, _: ExtraStore ->
-                    bolusMarkers.forEach { (xValue, marker) ->
-                        with(scope) {
-                            marker.at(xValue)
-                        }
-                    }
-                    carbMarkers.forEach { (xValue, marker) ->
-                        with(scope) {
-                            marker.at(xValue)
-                        }
-                    }
-                }
-            }
-        }
-        
-        val cgmLineRangeProvider = remember {
+        val cgmLineRangeProvider = remember(interactionGeometry) {
             object : CartesianLayerRangeProvider {
                 override fun getMinX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = minX
                 override fun getMaxX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = maxX
-                override fun getMinY(minY: Double, maxY: Double, extraStore: ExtraStore): Double = fixedMinGlucose.toDouble()
-                override fun getMaxY(minY: Double, maxY: Double, extraStore: ExtraStore): Double = fixedMaxGlucose.toDouble()
+                override fun getMinY(minY: Double, maxY: Double, extraStore: ExtraStore): Double =
+                    interactionGeometry.minimumMgdl.toDouble()
+                override fun getMaxY(minY: Double, maxY: Double, extraStore: ExtraStore): Double =
+                    interactionGeometry.maximumMgdl.toDouble()
             }
         }
-        val basalLineRangeProvider = remember(basalMaxUnitsPerHour) {
-            object : CartesianLayerRangeProvider {
-                override fun getMinX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = minX
-                override fun getMaxX(minX: Double, maxX: Double, extraStore: ExtraStore): Double = maxX
-                override fun getMinY(minY: Double, maxY: Double, extraStore: ExtraStore): Double = 0.0
-                override fun getMaxY(minY: Double, maxY: Double, extraStore: ExtraStore): Double = basalMaxUnitsPerHour
-            }
+        // Vico retains the data series for scrubbing, while the points are rendered by our
+        // threshold-aware Canvas overlay. Keeping Vico's series invisible prevents visual
+        // styles from becoming detached from their glucose values when series appear/disappear.
+        val invisibleCgmLine = LineCartesianLayer.rememberLine(
+            fill = LineCartesianLayer.LineFill.single(fill(ComposeColor.Transparent)),
+            stroke = LineCartesianLayer.LineStroke.Continuous(thicknessDp = 0f),
+        )
+        val cgmDotLines = vicoInteractionSeries.map { invisibleCgmLine }
+        val cgmLineLayer = key(interactionGeometry) {
+            rememberLineCartesianLayer(
+                lineProvider = LineCartesianLayer.LineProvider.series(cgmDotLines),
+                rangeProvider = cgmLineRangeProvider,
+            )
         }
-        val cgmLineLayer = rememberLineCartesianLayer(
-            rangeProvider = cgmLineRangeProvider
-        )
-        val basalColumnLayer = rememberColumnCartesianLayer(
-            columnProvider = ColumnCartesianLayer.ColumnProvider.series(
-                rememberLineComponent(
-                    fill(InsulinColors.Basal),
-                    thickness = 28.dp
-                )
-            ),
-            columnCollectionSpacing = 0.dp,
-            rangeProvider = basalLineRangeProvider
-        )
-        val cgmScrollState = rememberVicoScrollState(
-            scrollEnabled = false,
-            initialScroll = Scroll.Absolute.End
-        )
-        val basalScrollState = rememberVicoScrollState(
-            scrollEnabled = false,
-            initialScroll = Scroll.Absolute.End
-        )
+        val cgmScrollState = key(interactionGeometry) {
+            rememberVicoScrollState(
+                scrollEnabled = false,
+                initialScroll = Scroll.Absolute.End,
+            )
+        }
 
-        LaunchedEffect(timeRange, currentTimeSeconds) {
+        LaunchedEffect(cgmScrollState, currentTimeSeconds) {
             cgmScrollState.scroll(Scroll.Absolute.End)
-            basalScrollState.scroll(Scroll.Absolute.End)
         }
 
-        Box(
+        val cgmInteractionModifier = if (compactCover) {
+            Modifier
+        } else {
+            Modifier.chartViewportPan(
+                    historyStartSeconds = historyStartTimeSeconds,
+                    historyEndSeconds = historyEndTimeSeconds,
+                    viewportEndState = viewportEndState,
+                    viewportPinnedToLatestState = viewportPinnedToLatestState,
+                    horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                    onPanStart = {
+                        hoverDrivenByBasal = false
+                        hoveredChartTimestamp = null
+                        hoveredChartCanvasX = null
+                    },
+                    onPanFinished = {
+                        hoverDrivenByBasal = false
+                        hoveredChartTimestamp = null
+                        hoveredChartCanvasX = null
+                    },
+                )
+        }
+        BoxWithConstraints(
             modifier = modifier
                 .fillMaxWidth()
-                .height(CGM_CHART_HEIGHT_DP.dp)
+                .height(
+                    if (compactCover) compactScale.chartHeightDp.dp
+                    else CGM_CHART_HEIGHT_DP.dp
+                )
+                .then(cgmInteractionModifier)
         ) {
-            if (modeEvents.isNotEmpty()) {
-                Canvas(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(16.dp)
-                        .align(Alignment.TopCenter)
-                ) {
-                    val chartWidth = size.width
-                    val bandHeight = size.height
-
-                    modeEvents.forEach { modeEvent ->
-                        val modeStartRatio = ((modeEvent.timestamp - startTimeSeconds).toFloat() / rangeSeconds).coerceIn(0f, 1f)
-                        val startX = modeStartRatio * chartWidth
-                        val durationSeconds = (modeEvent.duration ?: 120) * 60L
-                        val modeEndTime = modeEvent.timestamp + durationSeconds
-                        val modeEndRatio = ((modeEndTime - startTimeSeconds).toFloat() / rangeSeconds).coerceIn(0f, 1f)
-                        val endX = modeEndRatio * chartWidth
-
-                        if (endX > 0 && startX < chartWidth) {
-                            val bandColor = when (modeEvent.mode) {
-                                TherapyMode.SLEEP -> ModeColors.SleepBand
-                                TherapyMode.EXERCISE -> ModeColors.ExerciseBand
-                                else -> ComposeColor.Transparent
-                            }
-
-                            drawRect(
-                                color = bandColor,
-                                topLeft = androidx.compose.ui.geometry.Offset(startX.coerceAtLeast(0f), 0f),
-                                size = androidx.compose.ui.geometry.Size(
-                                    width = (endX - startX).coerceAtLeast(8f),
-                                    height = bandHeight
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .width(CHART_Y_AXIS_WIDTH_DP.dp)
-                        .padding(end = 1.dp),
-                    verticalArrangement = Arrangement.SpaceBetween,
-                    horizontalAlignment = Alignment.End
-                ) {
-                    yAxisLabels.forEach { label ->
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(1f)
-                ) {
+            val timelineWidth = maxWidth - CHART_MARKER_GUTTER_DP.dp * 2
                     val hoveredCgmOffset = hoveredBasalRatio?.let { ratio ->
-                        (maxWidth * ratio) - 26.dp
+                        CHART_MARKER_GUTTER_DP.dp + (timelineWidth * ratio) - 26.dp
                     }
                     val guidelineColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
 
-                    CartesianChartHost(
-                        chart = rememberCartesianChart(
-                            cgmLineLayer,
-                            marker = dragMarker,
-                            markerVisibilityListener = cgmMarkerVisibilityListener,
-                            persistentMarkers = persistentMarkers
-                        ),
-                        scrollState = cgmScrollState,
-                        consumeMoveEvents = true,
-                        modelProducer = cgmModelProducer,
-                        modifier = Modifier.fillMaxSize()
+                    ControlIqTargetRangeOverlay(
+                        bands = controlIqTargetRangeBands,
+                        startTimestamp = startTimeSeconds,
+                        endTimestamp = currentTimeSeconds,
+                        minimumGlucoseMgdl = fixedMinGlucose,
+                        maximumGlucoseMgdl = fixedMaxGlucose,
+                        horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    if (!compactCover) {
+                        PumpTimeChangeLinesOverlay(
+                            markers = visiblePumpTimeChanges,
+                            startTimestamp = startTimeSeconds,
+                            endTimestamp = currentTimeSeconds,
+                            horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+
+                    key(interactionGeometry) {
+                        CartesianChartHost(
+                            chart = rememberCartesianChart(
+                                cgmLineLayer,
+                                marker = dragMarker,
+                                markerVisibilityListener = cgmMarkerVisibilityListener,
+                            ),
+                            scrollState = cgmScrollState,
+                            animationSpec = snap(),
+                            animateIn = false,
+                            consumeMoveEvents = false,
+                            modelProducer = cgmModelProducer,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = CHART_MARKER_GUTTER_DP.dp),
+                        )
+                    }
+
+                    if (!compactCover) {
+                        CgmAlertThresholdLinesOverlay(
+                            lines = thresholdLines,
+                            glucoseUnit = glucoseUnit,
+                            minimumGlucoseMgdl = fixedMinGlucose,
+                            maximumGlucoseMgdl = fixedMaxGlucose,
+                            horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+
+                    CgmThresholdColoredDotsOverlay(
+                        buckets = chartBuckets,
+                        startTimestamp = startTimeSeconds,
+                        endTimestamp = currentTimeSeconds,
+                        minimumGlucoseMgdl = fixedMinGlucose,
+                        maximumGlucoseMgdl = fixedMaxGlucose,
+                        graphDisplayPreferences = graphDisplayPreferences,
+                        horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    if (!compactCover) {
+                        BolusGlucoseMarkerOverlay(
+                            markers = bolusGlucoseMarkers,
+                            startTimestamp = startTimeSeconds,
+                            endTimestamp = currentTimeSeconds,
+                            bucketSeconds = bucketSeconds,
+                            bucketCount = bucketCount,
+                            minimumGlucoseMgdl = fixedMinGlucose,
+                            maximumGlucoseMgdl = fixedMaxGlucose,
+                            graphDisplayPreferences = graphDisplayPreferences,
+                            horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+
+                        // The pill may replace its own dot and one neighboring dot on each side.
+                        // All remaining dots are redrawn above it so the continuing trend stays clear.
+                        CgmThresholdColoredDotsOverlay(
+                            buckets = chartBuckets,
+                            startTimestamp = startTimeSeconds,
+                            endTimestamp = currentTimeSeconds,
+                            minimumGlucoseMgdl = fixedMinGlucose,
+                            maximumGlucoseMgdl = fixedMaxGlucose,
+                            graphDisplayPreferences = graphDisplayPreferences,
+                            excludedTimestamps = bolusPillCoveredBucketTimestamps,
+                            horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+
+                    }
+
+                    CgmPlotEdgeTicksOverlay(
+                        minimumGlucoseMgdl = fixedMinGlucose,
+                        maximumGlucoseMgdl = fixedMaxGlucose,
+                        horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                        modifier = Modifier.fillMaxSize(),
                     )
 
                     if (hoveredBasalRatio != null) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
-                            val x = size.width * hoveredBasalRatio
+                            val x = chartTimelineWidth(
+                                containerWidth = size.width,
+                                horizontalGutter = CHART_MARKER_GUTTER_DP.dp.toPx(),
+                            ) * hoveredBasalRatio + CHART_MARKER_GUTTER_DP.dp.toPx()
                             drawLine(
                                 color = guidelineColor,
                                 start = androidx.compose.ui.geometry.Offset(x, 0f),
@@ -1810,102 +2231,252 @@ fun VicoCgmChart(
                             textAlign = TextAlign.Center
                         )
                     }
+
+            // Keep the glucose scale inside the chart and draw it after all data layers so the
+            // small, light labels remain readable without consuming a separate outside column.
+            val labelHeight = CHART_Y_AXIS_LABEL_HEIGHT_DP.dp
+            yAxisLabels.forEach { (glucoseMgdl, label) ->
+                val labelTop = (
+                    maxHeight * glucoseValueYFraction(
+                        glucoseMgdl = glucoseMgdl,
+                        minimumGlucoseMgdl = fixedMinGlucose,
+                        maximumGlucoseMgdl = fixedMaxGlucose,
+                    ) - labelHeight / 2f
+                ).coerceIn(0.dp, maxHeight - labelHeight)
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(
+                            x = (
+                                CHART_MARKER_GUTTER_DP +
+                                    CHART_EDGE_TICK_LENGTH_DP +
+                                    CHART_Y_AXIS_LABEL_GAP_DP
+                                ).dp,
+                            y = labelTop,
+                        )
+                        .width(CHART_Y_AXIS_LABEL_WIDTH_DP.dp)
+                        .height(labelHeight),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text(
+                        text = label,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+                        fontSize = 8.sp,
+                        lineHeight = 8.sp,
+                        fontWeight = FontWeight.Light,
+                        textAlign = TextAlign.Start,
+                        maxLines = 1,
+                    )
                 }
             }
         }
 
-        Row(
+        val basalInteractionModifier = if (compactCover) {
+            Modifier
+        } else {
+            Modifier.chartViewportPan(
+                historyStartSeconds = historyStartTimeSeconds,
+                historyEndSeconds = historyEndTimeSeconds,
+                viewportEndState = viewportEndState,
+                viewportPinnedToLatestState = viewportPinnedToLatestState,
+                horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                onPanStart = {
+                    hoverDrivenByBasal = false
+                    hoveredChartTimestamp = null
+                    hoveredChartCanvasX = null
+                },
+                onPanFinished = {
+                    hoverDrivenByBasal = false
+                    hoveredChartTimestamp = null
+                    hoveredChartCanvasX = null
+                },
+            )
+        }
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(BASAL_CHART_HEIGHT_DP.dp)
+                .height(
+                    if (compactCover) COVER_BASAL_CHART_HEIGHT_DP.dp
+                    else BASAL_CHART_HEIGHT_DP.dp
+                )
+                .then(basalInteractionModifier)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(CHART_Y_AXIS_WIDTH_DP.dp)
-                    .padding(end = 1.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.End
-            ) {
-                basalYAxisLabels.forEach { label ->
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .weight(1f)
-                    .pointerInput(startTimeSeconds, currentTimeSeconds, bucketSeconds, bucketCount) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                hoverDrivenByBasal = true
-                                hoveredChartTimestamp = hoverTimestampForPosition(
-                                    x = offset.x,
-                                    width = size.width.toFloat(),
-                                    startTimeSeconds = startTimeSeconds,
-                                    currentTimeSeconds = currentTimeSeconds,
-                                    bucketSeconds = bucketSeconds,
-                                    bucketCount = bucketCount
-                                )
-                            },
-                            onDragEnd = {
-                                hoverDrivenByBasal = false
-                                hoveredChartTimestamp = null
-                            },
-                            onDragCancel = {
-                                hoverDrivenByBasal = false
-                                hoveredChartTimestamp = null
-                            }
-                        ) { change, _ ->
-                            hoverDrivenByBasal = true
-                            hoveredChartTimestamp = hoverTimestampForPosition(
-                                x = change.position.x,
-                                width = size.width.toFloat(),
-                                startTimeSeconds = startTimeSeconds,
-                                currentTimeSeconds = currentTimeSeconds,
-                                bucketSeconds = bucketSeconds,
-                                bucketCount = bucketCount
-                            )
-                            change.consume()
-                        }
-                    }
-            ) {
+                val timelineWidth = maxWidth - CHART_MARKER_GUTTER_DP.dp * 2
                 val hoveredBasalOffset = hoveredBasalRatio?.let { ratio ->
-                    (maxWidth * ratio) - 18.dp
+                    CHART_MARKER_GUTTER_DP.dp + (timelineWidth * ratio) - 18.dp
                 }
                 val guidelineColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                val suspendedDeliveryColor = MaterialTheme.colorScheme.error
+                val basalRateMarkers = remember(
+                    basalIntervals,
+                    startTimeSeconds,
+                    currentTimeSeconds,
+                    maxWidth,
+                    maxHeight,
+                    basalMaxUnitsPerHour,
+                    compactCover,
+                ) {
+                    if (compactCover) {
+                        emptyList()
+                    } else {
+                        layoutBasalRateMarkers(
+                            intervals = basalIntervals,
+                            startTimeSeconds = startTimeSeconds,
+                            currentTimeSeconds = currentTimeSeconds,
+                            containerWidthDp = maxWidth.value,
+                            chartHeightDp = maxHeight.value,
+                            basalMaxUnitsPerHour = basalMaxUnitsPerHour.toFloat(),
+                        )
+                    }
+                }
 
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val chartWidth = size.width
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                ) {
+                    val chartWidth = chartTimelineWidth(
+                        containerWidth = size.width,
+                        horizontalGutter = CHART_MARKER_GUTTER_DP.dp.toPx(),
+                    )
+                    val chartStartX = CHART_MARKER_GUTTER_DP.dp.toPx()
                     val chartHeight = size.height
                     val rangeSpan = (currentTimeSeconds - startTimeSeconds).toFloat().coerceAtLeast(1f)
 
                     basalIntervals.forEach { interval ->
                         val startRatio = ((interval.startTimestamp - startTimeSeconds).toFloat() / rangeSpan).coerceIn(0f, 1f)
                         val endRatio = ((interval.endTimestamp - startTimeSeconds).toFloat() / rangeSpan).coerceIn(0f, 1f)
-                        val left = startRatio * chartWidth
-                        val right = endRatio * chartWidth
-                        val normalizedRate = (interval.rate / basalMaxUnitsPerHour.toFloat()).coerceIn(0f, 1f)
-                        val top = chartHeight * (1f - normalizedRate)
-
+                        val left = chartStartX + startRatio * chartWidth
+                        val right = chartStartX + endRatio * chartWidth
                         if (right > left) {
-                            drawRect(
-                                color = if (interval.isTemp) InsulinColors.TempBasal else InsulinColors.Basal,
-                                topLeft = androidx.compose.ui.geometry.Offset(left, top),
-                                size = androidx.compose.ui.geometry.Size(right - left, chartHeight - top)
+                            if (interval.rate > 0f) {
+                                val normalizedRate =
+                                    (interval.rate / basalMaxUnitsPerHour.toFloat()).coerceIn(0f, 1f)
+                                val top = chartHeight * (1f - normalizedRate)
+                                val outlineColor = if (interval.isTemp) {
+                                    InsulinColors.TempBasal
+                                } else {
+                                    InsulinColors.Basal
+                                }
+                                val baselineY = chartHeight - 1.5.dp.toPx()
+                                val outlineWidth = 1.15.dp.toPx()
+                                val boundedTop = top.coerceAtMost(baselineY)
+                                val rectSize = androidx.compose.ui.geometry.Size(
+                                    right - left,
+                                    (baselineY - boundedTop).coerceAtLeast(0f),
+                                )
+                                drawRect(
+                                    color = outlineColor.copy(alpha = 0.24f),
+                                    topLeft = androidx.compose.ui.geometry.Offset(left, boundedTop),
+                                    size = rectSize,
+                                )
+                                // Tandem's blocks share the continuum as their bottom edge. Draw
+                                // only the top and interval boundaries here so no second border can
+                                // peek out below that thicker common baseline.
+                                drawLine(
+                                    color = outlineColor.copy(alpha = 0.9f),
+                                    start = androidx.compose.ui.geometry.Offset(left, boundedTop),
+                                    end = androidx.compose.ui.geometry.Offset(right, boundedTop),
+                                    strokeWidth = outlineWidth,
+                                )
+                                drawLine(
+                                    color = outlineColor.copy(alpha = 0.9f),
+                                    start = androidx.compose.ui.geometry.Offset(left, boundedTop),
+                                    end = androidx.compose.ui.geometry.Offset(left, baselineY),
+                                    strokeWidth = outlineWidth,
+                                )
+                                drawLine(
+                                    color = outlineColor.copy(alpha = 0.9f),
+                                    start = androidx.compose.ui.geometry.Offset(right, boundedTop),
+                                    end = androidx.compose.ui.geometry.Offset(right, baselineY),
+                                    strokeWidth = outlineWidth,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                basalRateMarkers.forEach { marker ->
+                    Text(
+                        text = marker.text,
+                        modifier = Modifier
+                            .offset(x = marker.leftDp.dp, y = marker.topDp.dp)
+                            .width(marker.widthDp.dp)
+                            .height(BASAL_RATE_LABEL_HEIGHT_DP.dp)
+                            .zIndex(1f),
+                        color = if (marker.isZero) {
+                            suspendedDeliveryColor
+                        } else {
+                            InsulinColors.Basal
+                        },
+                        fontSize = 10.sp,
+                        lineHeight = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                }
+
+                PumpTimeChangeBasalOverlay(
+                    markers = if (compactCover) emptyList() else visiblePumpTimeChanges,
+                    startTimestamp = startTimeSeconds,
+                    endTimestamp = currentTimeSeconds,
+                    horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                    modifier = Modifier.fillMaxSize(),
+                )
+
+                // Tandem keeps the ordinary blue basal/time continuum, but an explicit
+                // pump-authored 0.0 u/hr interval replaces that segment in red. This layer must
+                // follow the continuum or the thicker blue stroke hides the suspended interval.
+                Canvas(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    val chartWidth = chartTimelineWidth(
+                        containerWidth = size.width,
+                        horizontalGutter = CHART_MARKER_GUTTER_DP.dp.toPx(),
+                    )
+                    val chartStartX = CHART_MARKER_GUTTER_DP.dp.toPx()
+                    val rangeSpan =
+                        (currentTimeSeconds - startTimeSeconds).toFloat().coerceAtLeast(1f)
+                    val baselineY = size.height - 1.5.dp.toPx()
+
+                    basalIntervals.forEach { interval ->
+                        if (interval.rate != 0f) return@forEach
+                        val startRatio = (
+                            (interval.startTimestamp - startTimeSeconds).toFloat() / rangeSpan
+                        ).coerceIn(0f, 1f)
+                        val endRatio = (
+                            (interval.endTimestamp - startTimeSeconds).toFloat() / rangeSpan
+                        ).coerceIn(0f, 1f)
+                        val left = chartStartX + startRatio * chartWidth
+                        val right = chartStartX + endRatio * chartWidth
+                        if (right > left) {
+                            drawLine(
+                                color = suspendedDeliveryColor,
+                                start = androidx.compose.ui.geometry.Offset(left, baselineY),
+                                end = androidx.compose.ui.geometry.Offset(right, baselineY),
+                                strokeWidth = 2.5.dp.toPx(),
+                                cap = androidx.compose.ui.graphics.StrokeCap.Butt,
                             )
                         }
                     }
                 }
 
+                if (bolusTimelineMarkers.isNotEmpty()) {
+                    BolusTimelineLane(
+                        markers = bolusTimelineMarkers,
+                        horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
                 if (hoveredBasalRatio != null) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val x = size.width * hoveredBasalRatio
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                    ) {
+                        val x = chartTimelineWidth(
+                            containerWidth = size.width,
+                            horizontalGutter = CHART_MARKER_GUTTER_DP.dp.toPx(),
+                        ) * hoveredBasalRatio + CHART_MARKER_GUTTER_DP.dp.toPx()
                         drawLine(
                             color = guidelineColor,
                             start = androidx.compose.ui.geometry.Offset(x, 0f),
@@ -1926,74 +2497,418 @@ fun VicoCgmChart(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
-            }
         }
 
-        if (axisLabels.isNotEmpty()) {
-            Spacer(Modifier.height(Spacing.Small))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Spacer(Modifier.width(CHART_Y_AXIS_WIDTH_DP.dp))
-                Row(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    axisLabels.forEach { label ->
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
+        if (!compactCover && visiblePumpTimeChanges.isNotEmpty()) {
+            PumpTimeChangeEventLane(
+                markers = visiblePumpTimeChanges,
+                startTimestamp = startTimeSeconds,
+                endTimestamp = currentTimeSeconds,
+                horizontalGutterDp = CHART_MARKER_GUTTER_DP,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(TIME_CHANGE_EVENT_LANE_HEIGHT_DP.dp),
+            )
         }
 
-        // Mode legend if modes are present
-        if (modeEvents.isNotEmpty()) {
-            Spacer(Modifier.height(Spacing.ExtraSmall))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+        if (axisTicks.isNotEmpty()) {
+            Spacer(Modifier.height(if (compactCover) 2.dp else Spacing.Small))
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(if (compactCover) 16.dp else 20.dp),
             ) {
-                val hasSleep = modeEvents.any { it.mode == TherapyMode.SLEEP }
-                val hasExercise = modeEvents.any { it.mode == TherapyMode.EXERCISE }
-
-                if (hasSleep) {
-                    Surface(
-                        modifier = Modifier.width(16.dp).height(8.dp),
-                        color = ModeColors.SleepBand,
-                        shape = RoundedCornerShape(2.dp)
-                    ) {}
-                    Spacer(Modifier.width(Spacing.ExtraSmall))
+                val gutter = CHART_MARKER_GUTTER_DP.dp
+                val labelWidth = 72.dp
+                val timelineWidth = (maxWidth - gutter * 2).coerceAtLeast(0.dp)
+                axisTicks.forEach { tick ->
+                    val centeredOffset = gutter + timelineWidth * tick.position - labelWidth / 2
+                    val clampedOffset = centeredOffset.coerceIn(0.dp, maxWidth - labelWidth)
                     Text(
-                        "Sleep",
+                        text = tick.label,
+                        modifier = Modifier
+                            .width(labelWidth)
+                            .offset(x = clampedOffset),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (hasSleep && hasExercise) {
-                    Spacer(Modifier.width(Spacing.Medium))
-                }
-                if (hasExercise) {
-                    Surface(
-                        modifier = Modifier.width(16.dp).height(8.dp),
-                        color = ModeColors.ExerciseBand,
-                        shape = RoundedCornerShape(2.dp)
-                    ) {}
-                    Spacer(Modifier.width(Spacing.ExtraSmall))
-                    Text(
-                        "Exercise",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
                     )
                 }
             }
+        }
+
+        if (
+            (compactCover && bolusTimelineMarkers.isNotEmpty()) ||
+            (!compactCover && (bolusTimelineMarkers.isNotEmpty() || controlIqEnabled))
+        ) {
+            Spacer(Modifier.height(if (compactCover) 2.dp else Spacing.ExtraSmall))
+            ChartCompactKey(
+                modifier = Modifier.fillMaxWidth(),
+                showManual = bolusTimelineMarkers.any { !it.event.isAutomated },
+                showAutomatic = bolusTimelineMarkers.any { it.event.isAutomated },
+                showTargetRange = !compactCover && controlIqEnabled,
+            )
         }
     }
+}
+
+@Composable
+private fun ChartCompactKey(
+    showManual: Boolean,
+    showAutomatic: Boolean,
+    showTargetRange: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (showManual) {
+            ChartCompactKeyItem("Manual", InsulinColors.ManualBolus)
+        }
+        if (showAutomatic) {
+            if (showManual) Spacer(Modifier.width(Spacing.Medium))
+            ChartCompactKeyItem("Auto", InsulinColors.AutoBolus)
+        }
+        if (showTargetRange) {
+            if (showManual || showAutomatic) Spacer(Modifier.width(Spacing.Medium))
+            ChartCompactKeyItem("Target range", TargetRangeColor)
+        }
+    }
+}
+
+@Composable
+private fun ChartCompactKeyItem(label: String, color: ComposeColor) {
+    Surface(
+        modifier = Modifier
+            .width(14.dp)
+            .height(7.dp),
+        color = color,
+        shape = RoundedCornerShape(2.dp),
+    ) {}
+    Spacer(Modifier.width(4.dp))
+    Text(
+        text = label,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 9.sp,
+        maxLines = 1,
+    )
+}
+
+@Composable
+private fun ControlIqTargetRangeOverlay(
+    bands: List<ControlIqTargetRangeBand>,
+    startTimestamp: Long,
+    endTimestamp: Long,
+    minimumGlucoseMgdl: Float,
+    maximumGlucoseMgdl: Float,
+    horizontalGutterDp: Float = 0f,
+    modifier: Modifier = Modifier,
+) {
+    if (bands.isEmpty() || endTimestamp <= startTimestamp) return
+
+    Canvas(modifier = modifier) {
+        val durationSeconds = (endTimestamp - startTimestamp).toFloat()
+        val horizontalGutterPx = horizontalGutterDp.dp.toPx()
+        bands.forEach { band ->
+            val startRatio = ((band.startTimestamp - startTimestamp) / durationSeconds)
+                .coerceIn(0f, 1f)
+            val endRatio = ((band.endTimestamp - startTimestamp) / durationSeconds)
+                .coerceIn(0f, 1f)
+            val topRatio = glucoseValueYFraction(
+                glucoseMgdl = band.range.upperMgdl,
+                minimumGlucoseMgdl = minimumGlucoseMgdl,
+                maximumGlucoseMgdl = maximumGlucoseMgdl,
+            )
+            val bottomRatio = glucoseValueYFraction(
+                glucoseMgdl = band.range.lowerMgdl,
+                minimumGlucoseMgdl = minimumGlucoseMgdl,
+                maximumGlucoseMgdl = maximumGlucoseMgdl,
+            )
+
+            drawRect(
+                color = TargetRangeColor.copy(alpha = 0.65f),
+                topLeft = androidx.compose.ui.geometry.Offset(
+                    x = chartTimelineX(startRatio, size.width, horizontalGutterPx),
+                    y = size.height * topRatio,
+                ),
+                size = androidx.compose.ui.geometry.Size(
+                    width = chartTimelineWidth(size.width, horizontalGutterPx) *
+                        (endRatio - startRatio),
+                    height = size.height * (bottomRatio - topRatio),
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CgmPlotEdgeTicksOverlay(
+    minimumGlucoseMgdl: Float,
+    maximumGlucoseMgdl: Float,
+    horizontalGutterDp: Float = 0f,
+    modifier: Modifier = Modifier,
+) {
+    val tickValues = remember(minimumGlucoseMgdl, maximumGlucoseMgdl) {
+        glucoseAxisTickValues(
+            minimumGlucoseMgdl = minimumGlucoseMgdl,
+            maximumGlucoseMgdl = maximumGlucoseMgdl,
+        )
+    }
+    val minorTickValues = remember(minimumGlucoseMgdl, maximumGlucoseMgdl) {
+        glucoseAxisMinorTickValues(
+            minimumGlucoseMgdl = minimumGlucoseMgdl,
+            maximumGlucoseMgdl = maximumGlucoseMgdl,
+        )
+    }
+    if (tickValues.isEmpty() && minorTickValues.isEmpty()) return
+
+    Canvas(modifier = modifier) {
+        val horizontalGutterPx = horizontalGutterDp.dp.toPx()
+        val timelineStartX = horizontalGutterPx
+        val timelineEndX = size.width - horizontalGutterPx
+        val tickLength = CHART_EDGE_TICK_LENGTH_DP.dp.toPx()
+        val strokeWidth = CHART_EDGE_TICK_STROKE_DP.dp.toPx()
+        val minorTickLength = CHART_EDGE_MINOR_TICK_LENGTH_DP.dp.toPx()
+        val minorStrokeWidth = CHART_EDGE_MINOR_TICK_STROKE_DP.dp.toPx()
+
+        minorTickValues.forEach { glucoseMgdl ->
+            val y = (size.height * glucoseValueYFraction(
+                glucoseMgdl = glucoseMgdl,
+                minimumGlucoseMgdl = minimumGlucoseMgdl,
+                maximumGlucoseMgdl = maximumGlucoseMgdl,
+            )).coerceIn(minorStrokeWidth / 2f, size.height - minorStrokeWidth / 2f)
+
+            drawLine(
+                color = ComposeColor.Black.copy(alpha = CHART_EDGE_MINOR_TICK_ALPHA),
+                start = androidx.compose.ui.geometry.Offset(timelineStartX, y),
+                end = androidx.compose.ui.geometry.Offset(timelineStartX + minorTickLength, y),
+                strokeWidth = minorStrokeWidth,
+            )
+            drawLine(
+                color = ComposeColor.Black.copy(alpha = CHART_EDGE_MINOR_TICK_ALPHA),
+                start = androidx.compose.ui.geometry.Offset(timelineEndX - minorTickLength, y),
+                end = androidx.compose.ui.geometry.Offset(timelineEndX, y),
+                strokeWidth = minorStrokeWidth,
+            )
+        }
+
+        tickValues.forEach { glucoseMgdl ->
+            val y = (size.height * glucoseValueYFraction(
+                glucoseMgdl = glucoseMgdl,
+                minimumGlucoseMgdl = minimumGlucoseMgdl,
+                maximumGlucoseMgdl = maximumGlucoseMgdl,
+            )).coerceIn(strokeWidth / 2f, size.height - strokeWidth / 2f)
+
+            drawLine(
+                color = ComposeColor.Black,
+                start = androidx.compose.ui.geometry.Offset(timelineStartX, y),
+                end = androidx.compose.ui.geometry.Offset(timelineStartX + tickLength, y),
+                strokeWidth = strokeWidth,
+            )
+            drawLine(
+                color = ComposeColor.Black,
+                start = androidx.compose.ui.geometry.Offset(timelineEndX - tickLength, y),
+                end = androidx.compose.ui.geometry.Offset(timelineEndX, y),
+                strokeWidth = strokeWidth,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CgmAlertThresholdLinesOverlay(
+    lines: List<CgmAlertThresholdLine>,
+    glucoseUnit: GlucoseUnit,
+    minimumGlucoseMgdl: Float,
+    maximumGlucoseMgdl: Float,
+    horizontalGutterDp: Float = 0f,
+    modifier: Modifier = Modifier,
+) {
+    val fixedLowColor = GlucoseColors.Severe
+    val lowAlertColor = GraphGlucoseDotColors.LowOutline
+    val highAlertColor = GraphGlucoseDotColors.HighOutline
+
+    BoxWithConstraints(modifier = modifier) {
+        val labeledLines = remember(lines) { lines.filter { it.kind.isLabeledOnChart() } }
+        val labelTopOffsets = remember(
+            labeledLines,
+            maxHeight,
+            minimumGlucoseMgdl,
+            maximumGlucoseMgdl,
+        ) {
+            resolveThresholdLabelTopOffsets(
+                lines = labeledLines,
+                containerHeightDp = maxHeight.value,
+                minimumGlucoseMgdl = minimumGlucoseMgdl,
+                maximumGlucoseMgdl = maximumGlucoseMgdl,
+            )
+        }
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val horizontalGutterPx = horizontalGutterDp.dp.toPx()
+            lines.forEach { line ->
+                val y = size.height * cgmAlertThresholdYFraction(
+                    glucoseMgdl = line.glucoseMgdl,
+                    minimumGlucoseMgdl = minimumGlucoseMgdl,
+                    maximumGlucoseMgdl = maximumGlucoseMgdl,
+                )
+                val color = when (line.kind) {
+                    CgmAlertThresholdLineKind.FIXED_LOW -> fixedLowColor
+                    CgmAlertThresholdLineKind.LOW_ALERT -> lowAlertColor
+                    CgmAlertThresholdLineKind.HIGH_ALERT -> highAlertColor
+                    CgmAlertThresholdLineKind.LOWER_LIMIT -> lowAlertColor
+                    CgmAlertThresholdLineKind.UPPER_LIMIT -> highAlertColor
+                }
+                val isControlLimit = line.kind.isControlLimit()
+                val dashed = line.kind == CgmAlertThresholdLineKind.LOW_ALERT ||
+                    line.kind == CgmAlertThresholdLineKind.HIGH_ALERT
+                drawLine(
+                    color = color.copy(alpha = if (isControlLimit) 0.55f else 0.92f),
+                    start = androidx.compose.ui.geometry.Offset(horizontalGutterPx, y),
+                    end = androidx.compose.ui.geometry.Offset(size.width - horizontalGutterPx, y),
+                    strokeWidth = when {
+                        isControlLimit -> 0.75.dp.toPx()
+                        dashed -> 2.dp.toPx()
+                        else -> 2.dp.toPx()
+                    },
+                    pathEffect = if (dashed) {
+                        PathEffect.dashPathEffect(
+                            floatArrayOf(8.dp.toPx(), 6.dp.toPx()),
+                        )
+                    } else {
+                        null
+                    },
+                )
+            }
+        }
+
+        labeledLines.forEachIndexed { index, line ->
+            val color = when (line.kind) {
+                CgmAlertThresholdLineKind.FIXED_LOW -> fixedLowColor
+                CgmAlertThresholdLineKind.LOW_ALERT -> lowAlertColor
+                CgmAlertThresholdLineKind.HIGH_ALERT -> highAlertColor
+                CgmAlertThresholdLineKind.LOWER_LIMIT -> lowAlertColor
+                CgmAlertThresholdLineKind.UPPER_LIMIT -> highAlertColor
+            }
+            Text(
+                text = line.displayLabel(glucoseUnit),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(
+                        x = (
+                            CHART_MARKER_GUTTER_DP +
+                                CHART_EDGE_TICK_LENGTH_DP +
+                                CHART_Y_AXIS_LABEL_GAP_DP +
+                                CHART_Y_AXIS_LABEL_WIDTH_DP +
+                                4f
+                            ).dp,
+                        y = labelTopOffsets[index].dp,
+                    )
+                    .background(
+                        color = CardBackground.copy(alpha = 0.74f),
+                        shape = RoundedCornerShape(3.dp),
+                    )
+                    .padding(horizontal = 3.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = color,
+                fontSize = 8.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CgmThresholdColoredDotsOverlay(
+    buckets: List<ChartBucket>,
+    startTimestamp: Long,
+    endTimestamp: Long,
+    minimumGlucoseMgdl: Float,
+    maximumGlucoseMgdl: Float,
+    graphDisplayPreferences: GraphDisplayPreferences,
+    excludedTimestamps: Set<Long> = emptySet(),
+    horizontalGutterDp: Float = 0f,
+    modifier: Modifier = Modifier,
+) {
+    if (endTimestamp <= startTimestamp) return
+    Canvas(modifier = modifier) {
+        val durationSeconds = (endTimestamp - startTimestamp).toFloat()
+        val horizontalGutterPx = horizontalGutterDp.dp.toPx()
+        val radius = CGM_DOT_RADIUS_DP.dp.toPx()
+        val outlineWidth = CGM_DOT_OUTLINE_STROKE_DP.dp.toPx()
+        buckets.forEach { bucket ->
+            val glucose = bucket.value ?: return@forEach
+            if (bucket.timestamp !in startTimestamp..endTimestamp) return@forEach
+            if (bucket.timestamp in excludedTimestamps) return@forEach
+            val xFraction = ((bucket.timestamp - startTimestamp) / durationSeconds)
+                .coerceIn(0f, 1f)
+            val yFraction = glucoseValueYFraction(
+                glucoseMgdl = glucose.toFloat(),
+                minimumGlucoseMgdl = minimumGlucoseMgdl,
+                maximumGlucoseMgdl = maximumGlucoseMgdl,
+            )
+            val (fillColor, outlineColor) = when (
+                cgmDotRange(glucose, graphDisplayPreferences)
+            ) {
+                CgmDotRange.IN_RANGE ->
+                    GraphGlucoseDotColors.InRangeFill to GraphGlucoseDotColors.InRangeOutline
+                CgmDotRange.ABOVE_UPPER_LIMIT ->
+                    GraphGlucoseDotColors.HighFill to GraphGlucoseDotColors.HighOutline
+                CgmDotRange.BELOW_LOWER_LIMIT ->
+                    GraphGlucoseDotColors.LowFill to GraphGlucoseDotColors.LowOutline
+            }
+            val center = androidx.compose.ui.geometry.Offset(
+                x = chartTimelineX(xFraction, size.width, horizontalGutterPx),
+                y = size.height * yFraction,
+            )
+            drawCircle(color = fillColor, radius = radius, center = center)
+            drawCircle(
+                color = outlineColor,
+                radius = radius,
+                center = center,
+                style = Stroke(width = outlineWidth),
+            )
+        }
+    }
+}
+
+internal fun resolveThresholdLabelTopOffsets(
+    lines: List<CgmAlertThresholdLine>,
+    containerHeightDp: Float,
+    minimumGlucoseMgdl: Float,
+    maximumGlucoseMgdl: Float,
+    labelHeightDp: Float = 12f,
+    labelGapDp: Float = 2f,
+): List<Float> {
+    if (lines.isEmpty()) return emptyList()
+    val maximumTop = (containerHeightDp - labelHeightDp).coerceAtLeast(0f)
+    val desired = lines.mapIndexed { index, line ->
+        val center = containerHeightDp * cgmAlertThresholdYFraction(
+            glucoseMgdl = line.glucoseMgdl,
+            minimumGlucoseMgdl = minimumGlucoseMgdl,
+            maximumGlucoseMgdl = maximumGlucoseMgdl,
+        )
+        IndexedValue(index, (center - labelHeightDp / 2f).coerceIn(0f, maximumTop))
+    }.sortedBy { it.value }
+
+    val resolved = FloatArray(lines.size)
+    desired.forEachIndexed { sortedIndex, indexedValue ->
+        val minimumTop = if (sortedIndex == 0) 0f else {
+            resolved[desired[sortedIndex - 1].index] + labelHeightDp + labelGapDp
+        }
+        resolved[indexedValue.index] = indexedValue.value.coerceAtLeast(minimumTop)
+    }
+
+    val overflow = (resolved[desired.last().index] - maximumTop).coerceAtLeast(0f)
+    if (overflow > 0f) {
+        desired.forEach { resolved[it.index] -= overflow }
+    }
+    val underflow = (-resolved[desired.first().index]).coerceAtLeast(0f)
+    if (underflow > 0f) {
+        desired.forEach { resolved[it.index] += underflow }
+    }
+    return resolved.toList()
 }
 
 // Chart Legend Component
@@ -2086,96 +3001,36 @@ private fun LegendItem(
     }
 }
 
-// Time range selector component
-@Composable
-fun ChartTimeRangeSelector(
-    selectedRange: TimeRange,
-    onRangeSelected: (TimeRange) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.ExtraSmall)
-    ) {
-        TimeRange.values().forEach { range ->
-            FilterChip(
-                modifier = Modifier.height(28.dp),
-                selected = range == selectedRange,
-                onClick = { onRangeSelected(range) },
-                label = {
-                    Text(
-                        range.label,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                },
-                leadingIcon = if (range == selectedRange) {
-                    {
-                        Icon(
-                            Icons.Default.Check,
-                            contentDescription = null,
-                            modifier = Modifier.width(12.dp).height(12.dp)
-                        )
-                    }
-                } else null
-            )
-        }
-    }
-}
-
 @Composable
 fun VicoCgmChartCard(
     historyLogViewModel: HistoryLogViewModel?,
     modifier: Modifier = Modifier,
-    previewData: ChartPreviewData? = null
+    previewData: ChartPreviewData? = null,
+    compactCover: Boolean = false,
 ) {
-    val context = LocalContext.current
-    val prefs = remember(context) { Prefs(context) }
-    var selectedTimeRange by remember {
-        mutableStateOf(
-            prefs.dashboardChartTimeRange()?.toTimeRangeOrNull() ?: TimeRange.SIX_HOURS
-        )
-    }
-
-    Card(
+    SkinPanel(
+        variant = SkinPanelVariant.CHART,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.Small, vertical = Spacing.Small),
-        colors = CardDefaults.cardColors(containerColor = CardBackground),
-        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.Card),
-        shape = RoundedCornerShape(Spacing.CardCornerRadius)
+            .padding(
+                horizontal = if (compactCover) 4.dp else Spacing.Small,
+                vertical = if (compactCover) 2.dp else Spacing.Small,
+            ),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
-                    start = Spacing.ExtraSmall,
-                    end = Spacing.CardPadding,
-                    top = Spacing.Small,
-                    bottom = Spacing.CardPadding
+                    start = if (compactCover) 2.dp else Spacing.ExtraSmall,
+                    end = if (compactCover) 2.dp else Spacing.ExtraSmall,
+                    top = if (compactCover) 4.dp else Spacing.Small,
+                    bottom = if (compactCover) 4.dp else Spacing.CardPadding,
                 )
         ) {
-            // Header with time range selector
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ChartTimeRangeSelector(
-                    selectedRange = selectedTimeRange,
-                    onRangeSelected = {
-                        selectedTimeRange = it
-                        prefs.setDashboardChartTimeRange(it.name)
-                    }
-                )
-            }
-
-            Spacer(Modifier.height(Spacing.Medium))
-
-            // The chart
             VicoCgmChart(
                 historyLogViewModel = historyLogViewModel,
-                timeRange = selectedTimeRange,
-                previewData = previewData
+                previewData = previewData,
+                compactCover = compactCover,
             )
 
         }
@@ -2428,6 +3283,45 @@ internal fun VicoCgmChartCardWithBolusPreview() {
             VicoCgmChartCard(
                 historyLogViewModel = null,
                 previewData = previewData
+            )
+        }
+    }
+}
+
+@Preview(showBackground = true, name = "Basal Labels and Suspension")
+@Composable
+internal fun VicoCgmChartCardBasalMarkersPreview() {
+    val baseTimestamp = 1_700_000_000L
+    val cgmValues = List(49) { index ->
+        118 + ((index % 12) - 6)
+    }
+    val cgmDataPoints = createCgmPreviewData(cgmValues, baseTimestamp)
+    val previewData = ChartPreviewData(
+        cgmDataPoints = cgmDataPoints,
+        bolusEvents = createBolusPreviewData(
+            baseTimestamp = baseTimestamp,
+            entries = listOf(
+                Triple(10, 1.63f, false),
+                Triple(29, 0.35f, true),
+            ),
+        ),
+        basalDataPoints = listOf(
+            BasalDataPoint(baseTimestamp, 0.5f, false, null),
+            BasalDataPoint(baseTimestamp + 12 * 300L, 0.15f, true, null),
+            BasalDataPoint(baseTimestamp + 24 * 300L, 0.5f, false, null),
+            BasalDataPoint(baseTimestamp + 36 * 300L, 0f, false, null),
+        ),
+        currentTimeSeconds = cgmDataPoints.last().timestamp,
+    )
+
+    ControlX2Theme {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = SurfaceBackground,
+        ) {
+            VicoCgmChartCard(
+                historyLogViewModel = null,
+                previewData = previewData,
             )
         }
     }

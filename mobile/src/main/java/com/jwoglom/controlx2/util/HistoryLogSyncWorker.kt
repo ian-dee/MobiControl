@@ -9,11 +9,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import timber.log.Timber
 
+const val HistoryLogStatusIntervalMs = 60_000L
+
 /**
- * Lightweight periodic worker that triggers HistoryLogStatus requests while the pump is connected.
+ * Lightweight periodic worker that triggers a sequence-only HistoryLogStatus request while the
+ * pump is connected. The fetcher downloads records only when the pump reports a missing range.
  */
 class HistoryLogSyncWorker(
-    private val intervalMinutes: Int = 5,
+    private val intervalMs: Long = HistoryLogStatusIntervalMs,
     private val requestSync: () -> Unit
 ) : PumpHistoryLogSyncWorker {
     private val handler = Handler(Looper.getMainLooper())
@@ -61,6 +64,6 @@ class HistoryLogSyncWorker(
             }
         }
         syncRunnable = runnable
-        handler.postDelayed(runnable, intervalMinutes * 60 * 1000L)
+        handler.postDelayed(runnable, intervalMs)
     }
 }

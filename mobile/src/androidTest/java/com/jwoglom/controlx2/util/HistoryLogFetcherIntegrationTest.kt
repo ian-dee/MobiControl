@@ -213,17 +213,17 @@ class HistoryLogFetcherIntegrationTest {
         fetcher.onStatusResponse(status, scope)
         waitForFetchCompletion(scope)
 
-        // Chunk size is 32, fetching 1..100 = 100 items
+        // Chunk size is 30, fetching 1..100 = 100 items
         // Chunks should be requested newest-first:
-        //   100 (count=32) -> covers 69..100
-        //   68  (count=32) -> covers 37..68
-        //   36  (count=32) -> covers 5..36
-        //   4   (count=4)  -> covers 1..4
+        //   100 (count=30) -> covers 71..100
+        //   70  (count=30) -> covers 41..70
+        //   40  (count=30) -> covers 11..40
+        //   10  (count=10) -> covers 1..10
         assertTrue("Should have sent at least 4 commands", sentCommands.size >= 4)
 
         val firstCmd = sentCommands[0]
         assertEquals("First request should start at seqId 100", 100L, firstCmd.first)
-        assertEquals("First chunk should be size 32", 32, firstCmd.second)
+        assertEquals("First chunk should be size 30", 30, firstCmd.second)
 
         val dbCount = repo.getCount(TEST_PUMP_SID).firstOrNull()
         assertEquals("All 100 items should be in DB", 100L, dbCount)
@@ -240,15 +240,13 @@ class HistoryLogFetcherIntegrationTest {
         fetcher.onStatusResponse(status, scope)
         waitForFetchCompletion(scope)
 
-        // 96 items / 32 chunk = exactly 3 chunks
-        assertEquals("Should send exactly 3 commands", 3, sentCommands.size)
+        // 96 items in 30-record batches requires four commands.
+        assertEquals("Should send exactly 4 commands", 4, sentCommands.size)
         assertEquals("First command at 96", 96L, sentCommands[0].first)
-        assertEquals("Second command at 64", 64L, sentCommands[1].first)
-        assertEquals("Third command at 32", 32L, sentCommands[2].first)
-
-        sentCommands.forEach { (_, count) ->
-            assertEquals("Each chunk should be 32", 32, count)
-        }
+        assertEquals("Second command at 66", 66L, sentCommands[1].first)
+        assertEquals("Third command at 36", 36L, sentCommands[2].first)
+        assertEquals("Fourth command at 6", 6L, sentCommands[3].first)
+        assertEquals(listOf(30, 30, 30, 6), sentCommands.map { it.second })
     }
 
     @Test
@@ -482,17 +480,21 @@ class HistoryLogFetcherIntegrationTest {
 
         // HistoryLogRequest(startSeqId, count):
         // the pump returns items backward from startSeqId.
-        // So for range [33..64], the request is (64, 32).
-        // For range [1..32], the request is (32, 32).
-        assertEquals("Should send exactly 2 commands", 2, sentCommands.size)
+        // Match the official Mobi client's 30-record batches. For range [1..64],
+        // the requests therefore cover [35..64], [5..34], and [1..4].
+        assertEquals("Should send exactly 3 commands", 3, sentCommands.size)
 
         val cmd1 = sentCommands[0]
         assertEquals("First command startSeqId", 64L, cmd1.first)
-        assertEquals("First command count", 32, cmd1.second)
+        assertEquals("First command count", 30, cmd1.second)
 
         val cmd2 = sentCommands[1]
-        assertEquals("Second command startSeqId", 32L, cmd2.first)
-        assertEquals("Second command count", 32, cmd2.second)
+        assertEquals("Second command startSeqId", 34L, cmd2.first)
+        assertEquals("Second command count", 30, cmd2.second)
+
+        val cmd3 = sentCommands[2]
+        assertEquals("Third command startSeqId", 4L, cmd3.first)
+        assertEquals("Third command count", 4, cmd3.second)
     }
 
     @Test
@@ -692,7 +694,7 @@ class HistoryLogFetcherIntegrationTest {
         // entries (e.g. the newest 96 out of 5000) but is missing everything older.
         // On reconnect the fetcher should detect the sparse DB and fetch the rest.
         val pumpLastSeq = 10000L
-        val catchupStart = pumpLastSeq - InitialHistoryLogCount  // 5000
+        val catchupStart = historyLogWindowStart(1, pumpLastSeq)
 
         // Insert only the newest 96 entries (as if the first fetch was killed mid-way)
         insertExistingLogs((pumpLastSeq - 95)..pumpLastSeq)
@@ -709,7 +711,7 @@ class HistoryLogFetcherIntegrationTest {
         waitForFetchCompletion(scope, timeoutMs = 60_000L)
 
         val dbCount = repo.getCount(TEST_PUMP_SID).firstOrNull() ?: 0
-        val expectedCount = pumpLastSeq - catchupStart + 1  // 5001
+        val expectedCount = pumpLastSeq - catchupStart + 1
         assertEquals(
             "DB should have all entries in the catchup window, not just the 96 from the interrupted fetch",
             expectedCount,
@@ -717,7 +719,7 @@ class HistoryLogFetcherIntegrationTest {
         )
 
         // Verify the oldest entries in the window were actually fetched
-        val oldestInWindow = catchupStart + 1
+        val oldestInWindow = catchupStart
         val allIds = repo.getAllIds(TEST_PUMP_SID, oldestInWindow, oldestInWindow + 10)
         for (id in oldestInWindow..(oldestInWindow + 10)) {
             assertTrue("Older seqId $id should have been fetched", id in allIds)

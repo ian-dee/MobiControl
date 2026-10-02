@@ -23,17 +23,19 @@ class PumpFinderCommHandler(
     private val callbacks: CommServiceCallbacks
 ) : Handler(looper) {
 
-    private lateinit var pumpFinder: PumpFinder
+    private var pumpFinder: PumpFinder? = null
     private var pumpFinderActive = false
-    private var foundPumps = mutableListOf<String>()
+    private val discoveryRoster = PumpFinderDiscoveryRoster()
 
-    private inner class PumpFinder : TandemPumpFinder(callbacks.getApplicationContext(), null) {
+    private inner class PumpFinder(
+        private val scanGeneration: Long,
+    ) : TandemPumpFinder(callbacks.getApplicationContext(), null) {
         init {
             Timber.i("PumpFinder init")
         }
 
         override fun toString(): String {
-            return "PumpFinder(pumpFinderActive=${pumpFinderActive},foundPumps=${foundPumps.joinToString(";")})"
+            return "PumpFinder(pumpFinderActive=$pumpFinderActive,foundPumpCount=${discoveryRoster.entries().size})"
         }
 
         override fun onDiscoveredPump(
@@ -41,20 +43,24 @@ class PumpFinderCommHandler(
             scanResult: ScanResult?,
             readyState: PumpReadyState
         ) {
-            val name = when {
-                peripheral?.name.isNullOrEmpty() -> "NO NAME"
-                else -> peripheral?.name
-            }
-            val key = "${name}=${peripheral?.address}"
+            val observation = discoveryRoster.observe(
+                observedGeneration = scanGeneration,
+                rawName = peripheral?.name,
+                rawAddress = peripheral?.address,
+                readyState = readyState,
+            ) ?: return
+            val entry = observation.entry
+            val displayName = entry.name ?: "NO NAME"
+            val key = "$displayName=${entry.address}"
             callbacks.sendWearCommMessage(
                 MessagePaths.FROM_PUMP_PUMP_FINDER_PUMP_DISCOVERED,
                 "${key};;${readyState.name}".toByteArray()
             )
-            // Keep emitting ready-state transitions, but only add each pump once to selection list.
-            if (!foundPumps.contains(key)) {
-                foundPumps.add(key)
+            // The selectable summary contains only named pumps. An unnamed advertisement is still
+            // emitted above as non-interactive progress and can later upgrade this same MAC row.
+            if (observation.rosterChanged && entry.name != null) {
                 callbacks.sendWearCommMessage(MessagePaths.FROM_PUMP_PUMP_FINDER_FOUND_PUMPS,
-                    foundPumps.joinToString(";").toByteArray()
+                    discoveryRoster.namedPumpPayload().toByteArray()
                 )
             }
         }
@@ -71,15 +77,27 @@ class PumpFinderCommHandler(
         when (msg.what) {
             CommServiceCodes.INIT_PUMP_FINDER_COMM.ordinal -> {
                 Timber.i("pumpFinderCommHandler: init_pump_comm")
+                pumpFinder?.let { existing ->
+                    discoveryRoster.stopGeneration()
+                    try {
+                        existing.stop()
+                    } catch (e: SecurityException) {
+                        Timber.w(e, "pumpFinderCommHandler: unable to stop previous finder")
+                    }
+                }
+                pumpFinderActive = false
+                val scanGeneration = discoveryRoster.startGeneration()
                 try {
-                    pumpFinder = PumpFinder()
+                    pumpFinder = PumpFinder(scanGeneration)
                 } catch (e: SecurityException) {
                     Timber.e("pumpFinderCommHandler: SecurityException starting pump $e")
+                    pumpFinder = null
+                    return
                 }
                 while (true) {
                     try {
                         Timber.i("pumpFinderCommHandler: Starting scan...")
-                        pumpFinder.startScan()
+                        pumpFinder?.startScan() ?: return
                         pumpFinderActive = true
                         break
                     } catch (e: SecurityException) {
@@ -89,14 +107,22 @@ class PumpFinderCommHandler(
                 }
             }
             CommServiceCodes.STOP_PUMP_FINDER_COMM.ordinal -> {
-                pumpFinder.stop()
+                val finderToStop = pumpFinder
+                discoveryRoster.stopGeneration()
+                pumpFinder = null
+                finderToStop?.stop()
                 pumpFinderActive = false
-                foundPumps.clear()
             }
             CommServiceCodes.CHECK_PUMP_FINDER_FOUND_PUMPS.ordinal -> {
                 if (pumpFinderActive) {
+                    discoveryRoster.entries().forEach { entry ->
+                        callbacks.sendWearCommMessage(
+                            MessagePaths.FROM_PUMP_PUMP_FINDER_PUMP_DISCOVERED,
+                            "${entry.name ?: "NO NAME"}=${entry.address};;${entry.readyState.name}".toByteArray(),
+                        )
+                    }
                     callbacks.sendWearCommMessage(MessagePaths.FROM_PUMP_PUMP_FINDER_FOUND_PUMPS,
-                        foundPumps.joinToString(";").toByteArray()
+                        discoveryRoster.namedPumpPayload().toByteArray()
                     )
                 }
             }

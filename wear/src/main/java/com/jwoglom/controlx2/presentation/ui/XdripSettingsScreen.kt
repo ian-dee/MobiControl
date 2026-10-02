@@ -19,7 +19,6 @@ import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.Text
-import com.jwoglom.controlx2.MainActivity
 import com.jwoglom.controlx2.WearPrefs
 import com.jwoglom.controlx2.sync.xdrip.XdripPayloadGroup
 import com.jwoglom.controlx2.sync.xdrip.XdripSyncConfig
@@ -27,12 +26,8 @@ import com.jwoglom.controlx2.sync.xdrip.XdripSyncConfig
 /**
  * Pump-host watch settings for xDrip+ broadcasts. Reads/writes the `"WearX2"`
  * SharedPreferences file via [XdripSyncConfig.load] / [save] — same file
- * [com.jwoglom.controlx2.sync.xdrip.XdripMessageDispatcher] reads on construction.
- *
- * When the config change requires the service to restart (see
- * [XdripSyncConfig.requiresReloadComparedTo], true for the enable toggle),
- * the mobile three-step reload sequence is dispatched via
- * [MainActivity.reEnablePumpService] so the running service picks up the change.
+ * [com.jwoglom.controlx2.sync.xdrip.XdripMessageDispatcher] reads for every received message.
+ * Settings therefore apply live and must not restart the watch service or pump connection.
  */
 @Composable
 fun XdripSettingsScreen() {
@@ -42,14 +37,10 @@ fun XdripSettingsScreen() {
     var config by remember { mutableStateOf(XdripSyncConfig.load(prefs)) }
 
     fun saveConfig(newConfig: XdripSyncConfig, toastText: String? = null) {
-        val oldConfig = config
         config = newConfig
         XdripSyncConfig.save(prefs, newConfig)
         if (toastText != null) {
             Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
-        }
-        if (newConfig.requiresReloadComparedTo(oldConfig)) {
-            (context as? MainActivity)?.forceReloadService()
         }
     }
 

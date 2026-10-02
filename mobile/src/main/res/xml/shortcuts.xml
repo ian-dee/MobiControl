@@ -8,9 +8,9 @@
         android:shortcutShortLabel="@string/shortcut_bolus_short">
         <intent
             android:action="android.intent.action.VIEW"
-            android:data="com_jwoglom_controlx2://controlx2/bolus"
+            android:data="local.controlx21://controlx21/bolus"
             android:targetClass="com.jwoglom.controlx2.MainActivity"
-            android:targetPackage="com.jwoglom.controlx2" />
+            android:targetPackage="local.controlx21" />
     </shortcut>
 
     <shortcut
@@ -21,8 +21,8 @@
         android:shortcutShortLabel="@string/shortcut_temp_rate_short">
         <intent
             android:action="android.intent.action.VIEW"
-            android:data="com_jwoglom_controlx2://controlx2/temp-rate"
+            android:data="local.controlx21://controlx21/temp-rate"
             android:targetClass="com.jwoglom.controlx2.MainActivity"
-            android:targetPackage="com.jwoglom.controlx2" />
+            android:targetPackage="local.controlx21" />
     </shortcut>
 </shortcuts>

@@ -76,6 +76,9 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'io.mockk:mockk:1.13.13'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    // Android's org.json classes are stubs in local JVM tests. xDrip payload tests need the real
+    // implementation or serialization returns null before the contract is actually exercised.
+    testImplementation 'org.json:json:20230618'
     // NanoHTTPD: in-process HTTP server used by NightscoutClientIntegrationTest
     // (unit test) and NightscoutPipelineIntegrationTest (instrumentation test).
     testImplementation 'org.nanohttpd:nanohttpd:2.3.1'

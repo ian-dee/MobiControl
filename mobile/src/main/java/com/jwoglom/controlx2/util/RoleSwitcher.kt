@@ -7,6 +7,7 @@ import com.jwoglom.controlx2.CommService
 import com.jwoglom.controlx2.MobileClientService
 import com.jwoglom.controlx2.Prefs
 import com.jwoglom.controlx2.messaging.MessageBusFactory
+import com.jwoglom.controlx2.shared.IntegrationGates
 import com.jwoglom.controlx2.pump.util.removeBondCompat
 import com.jwoglom.controlx2.shared.MessagePaths
 import com.jwoglom.controlx2.shared.enums.DeviceRole
@@ -32,6 +33,11 @@ fun switchDeviceRole(
     newRole: DeviceRole,
     notifyPeer: Boolean = true,
 ) {
+    if (!IntegrationGates.WATCH_INTEGRATION_ENABLED) {
+        Timber.w("switchDeviceRole ignored: watch integration is disabled")
+        return
+    }
+
     val context = activity.applicationContext
     val prefs = Prefs(context)
     val currentRole = prefs.deviceRole()
@@ -78,6 +84,11 @@ fun switchDeviceRole(
  * Use when the user is in a half-flipped / pairing-popup-loop state.
  */
 fun rescueResetThisDevice(activity: Activity) {
+    if (!IntegrationGates.WATCH_INTEGRATION_ENABLED) {
+        Timber.w("rescueResetThisDevice ignored: watch integration is disabled")
+        return
+    }
+
     val context = activity.applicationContext
     val prefs = Prefs(context)
     Timber.i("rescueResetThisDevice: forcing PUMP_HOST on phone")
@@ -121,6 +132,11 @@ fun rescueResetThisDevice(activity: Activity) {
  * [activity.recreate], so we trigger a process reload via [triggerAppReload].
  */
 fun applyPeerRescueFromService(context: Context, becomeClient: Boolean) {
+    if (!IntegrationGates.WATCH_INTEGRATION_ENABLED) {
+        Timber.w("applyPeerRescueFromService ignored: watch integration is disabled")
+        return
+    }
+
     val prefs = Prefs(context)
     Timber.i("applyPeerRescueFromService: becomeClient=$becomeClient (currentRole=${prefs.deviceRole()})")
 

@@ -71,7 +71,7 @@ fun getSupportBundleSummary(context: Context): SupportBundleSummary? {
 }
 
 private fun createSupportBundleZip(context: Context, timestamp: String, debugLogs: List<File>): File {
-    val bundleFile = File(context.filesDir, "controlx2-support-bundle-$timestamp.zip")
+    val bundleFile = File(context.filesDir, "mobicontrol-support-bundle-$timestamp.zip")
     ZipOutputStream(FileOutputStream(bundleFile, false)).use { zipOutputStream ->
         debugLogs.forEach { logFile ->
             zipOutputStream.putNextEntry(ZipEntry(logFile.name))
@@ -105,10 +105,10 @@ fun shareSupportBundle(context: Context) {
     val intent = Intent(Intent.ACTION_SEND)
         .setType("application/zip")
         .putExtra(Intent.EXTRA_STREAM, uri)
-        .putExtra(Intent.EXTRA_SUBJECT, "PumpX2 Support Bundle - $subjectTimestamp")
+        .putExtra(Intent.EXTRA_SUBJECT, "MobiControl Support Bundle - $subjectTimestamp")
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-    context.startActivity(Intent.createChooser(intent, "Send PumpX2 Support Bundle"))
+    context.startActivity(Intent.createChooser(intent, "Share MobiControl Support Bundle"))
 }
 
 fun sendSupportBundleEmail(context: Context) {
@@ -134,10 +134,10 @@ fun sendSupportBundleEmail(context: Context) {
     val intent = Intent(Intent.ACTION_SEND)
         .setType("application/zip")
         .putExtra(Intent.EXTRA_EMAIL, arrayOf(supportEmail))
-        .putExtra(Intent.EXTRA_SUBJECT, "PumpX2 Support Bundle - $subjectTimestamp")
+        .putExtra(Intent.EXTRA_SUBJECT, "MobiControl Support Bundle - $subjectTimestamp")
         .putExtra(Intent.EXTRA_TEXT, "Contains ${summary.debugFileCount} debug files with $totalLogLines total logs from ${summary.rangeStart} - ${summary.rangeEnd}")
         .putExtra(Intent.EXTRA_STREAM, uri)
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-    context.startActivity(Intent.createChooser(intent, "Send PumpX2 Support Bundle Email"))
+    context.startActivity(Intent.createChooser(intent, "Send MobiControl Support Bundle Email"))
 }

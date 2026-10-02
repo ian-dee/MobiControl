@@ -7,6 +7,10 @@ import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import com.jwoglom.controlx2.LocalDataStore
 import com.jwoglom.controlx2.shared.presentation.intervalOf
 import com.jwoglom.controlx2.shared.util.shortTimeAgo
@@ -35,17 +39,27 @@ fun LastConnectionUpdatedTimestamp() {
         updatePumpLastMessageTsRelative()
     }
 
-    when {
+    val statusText = when {
         pumpConnected.value == false -> when {
-            pumpLastMessageTimestampRelative != null -> Line("Last connected: $pumpLastMessageTimestampRelative", bold = true)
-            pumpLastConnectionTimestamp.value != null -> Line("Device last seen: ${pumpLastConnectionTimestamp.value}", bold = true)
-            else -> {}
+            pumpLastMessageTimestampRelative != null ->
+                "Last connected\n$pumpLastMessageTimestampRelative"
+            pumpLastConnectionTimestamp.value != null ->
+                "Device last seen\n${pumpLastConnectionTimestamp.value}"
+            else -> null
         }
-        pumpLastMessageTimestamp.value == null -> {}
-        pumpLastMessageTimestampRelative == null -> {}
-        else -> {
-            Line("Last updated: $pumpLastMessageTimestampRelative", bold = true)
-        }
+        pumpLastMessageTimestamp.value == null -> null
+        pumpLastMessageTimestampRelative == null -> null
+        else -> "Updated\n$pumpLastMessageTimestampRelative"
+    }
+
+    statusText?.let {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+        )
 
     }
 }

@@ -264,7 +264,7 @@ class HttpDebugApiService(private val context: Context, private val port: Int = 
                     MIME_PLAINTEXT,
                     "Unauthorized"
                 )
-                response.addHeader("WWW-Authenticate", "Basic realm=\"ControlX2 Debug API\"")
+                response.addHeader("WWW-Authenticate", "Basic realm=\"MobiControl Debug API\"")
                 return response
             }
 

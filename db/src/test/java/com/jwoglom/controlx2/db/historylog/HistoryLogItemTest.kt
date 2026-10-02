@@ -2,6 +2,7 @@ package com.jwoglom.controlx2.db.historylog
 
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.BolusCompletedHistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.BolusDeliveryHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.AlertAckHistoryLog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -51,5 +52,15 @@ class HistoryLogItemTest {
         val parsed = HistoryLogItem(message).parse()
 
         assertTrue(parsed is BolusCompletedHistoryLog)
+    }
+
+    @Test
+    fun parse_explicitlyDecodesType27AlertAcknowledgement() {
+        val message = AlertAckHistoryLog(1_000L, 4_244L, 17L)
+
+        val parsed = HistoryLogItem(message).parse()
+
+        assertTrue(parsed is AlertAckHistoryLog)
+        assertEquals(17L, (parsed as AlertAckHistoryLog).alertId)
     }
 }

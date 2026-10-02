@@ -31,9 +31,44 @@ import com.jwoglom.controlx2.db.historylog.HistoryLogRepo
 import com.jwoglom.controlx2.db.historylog.HistoryLogViewModel
 import com.jwoglom.controlx2.presentation.DataStore
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
+import com.jwoglom.controlx2.util.historyLogWindowSize
+import com.jwoglom.controlx2.util.historyLogWindowStart
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.HistoryLogStatusResponse
 import java.time.LocalDateTime
-import kotlin.math.max
+
+internal data class HistorySyncPresentation(
+    val status: String,
+    val detail: String?,
+    val progress: Float,
+    val isSynced: Boolean,
+)
+
+internal fun historySyncPresentation(
+    syncedLogs: Long,
+    totalLogs: Long,
+): HistorySyncPresentation {
+    val progress = if (totalLogs > 0) {
+        (syncedLogs.toFloat() / totalLogs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        1f
+    }
+    val isSynced = syncedLogs >= totalLogs
+    return when {
+        isSynced -> HistorySyncPresentation("Synced", null, progress, true)
+        syncedLogs == 0L -> HistorySyncPresentation(
+            status = "Starting…",
+            detail = "Requesting recent pump history in the background",
+            progress = progress,
+            isSynced = false,
+        )
+        else -> HistorySyncPresentation(
+            status = "$syncedLogs / $totalLogs",
+            detail = "${(progress * 100).toInt()}% complete (${totalLogs - syncedLogs} logs remaining)",
+            progress = progress,
+            isSynced = false,
+        )
+    }
+}
 
 @Composable
 fun HistoryLogSyncProgressBar(
@@ -49,31 +84,22 @@ fun HistoryLogSyncProgressBar(
         val pumpMaxSeqNum = status.lastSequenceNum
         val pumpMinSeqNum = status.firstSequenceNum
         
-        // Calculate the range we care about: the most recent 5000 sequence IDs
-        val targetMinSeqId = max(pumpMinSeqNum, pumpMaxSeqNum - 5000)
+        // Use the exact same inclusive 5,000-record window as the fetcher.
+        val targetMinSeqId = historyLogWindowStart(pumpMinSeqNum, pumpMaxSeqNum)
         
-        // Get count of logs in DB above this threshold
-        val countAboveTargetSeqId = remember(historyLogViewModel, targetMinSeqId) {
-            historyLogViewModel.getCountAboveSeqId(targetMinSeqId)
+        // Count only this pump-reported range. A newer record arriving after this status response
+        // must not make an incomplete window look complete.
+        val countInTargetRange = remember(historyLogViewModel, targetMinSeqId, pumpMaxSeqNum) {
+            historyLogViewModel.getCountInRange(targetMinSeqId, pumpMaxSeqNum)
         }
-        val dbLogCount by countAboveTargetSeqId.observeAsState()
+        val dbLogCount by countInTargetRange.observeAsState()
         val syncedLogs = dbLogCount ?: 0L
         
-        // Total logs is the count that should exist on the pump in this range
-        // If pumpMinSeqNum is within our target range, we only track from there
-        val effectiveMinSeqId = max(pumpMinSeqNum, targetMinSeqId)
-        val totalLogs = pumpMaxSeqNum - effectiveMinSeqId
+        val totalLogs = historyLogWindowSize(targetMinSeqId, pumpMaxSeqNum)
         
-        // Calculate progress (handle edge cases)
-        val progress = if (totalLogs > 0) {
-            (syncedLogs.toFloat() / totalLogs.toFloat()).coerceIn(0f, 1f)
-        } else {
-            1f
-        }
-        
-        val isSynced = syncedLogs >= totalLogs
+        val presentation = historySyncPresentation(syncedLogs, totalLogs)
 
-        if (replaceWithPaddingWhenComplete && isSynced) {
+        if (replaceWithPaddingWhenComplete && presentation.isSynced) {
             Column(
                 modifier = modifier
                     .fillMaxWidth()
@@ -85,7 +111,7 @@ fun HistoryLogSyncProgressBar(
             return
         }
 
-        if (hideWhenComplete && isSynced) {
+        if (hideWhenComplete && presentation.isSynced) {
             return
         }
 
@@ -107,14 +133,10 @@ fun HistoryLogSyncProgressBar(
                 )
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
-                    text = if (isSynced) {
-                        "Synced"
-                    } else {
-                        "$syncedLogs / $totalLogs"
-                    },
+                    text = presentation.status,
                     style = MaterialTheme.typography.bodySmall,
                     fontSize = 12.sp,
-                    color = if (isSynced) {
+                    color = if (presentation.isSynced) {
                         MaterialTheme.colorScheme.primary
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -125,16 +147,16 @@ fun HistoryLogSyncProgressBar(
             Spacer(modifier = Modifier.height(4.dp))
             
             LinearProgressIndicator(
-                progress = { progress },
+                progress = { presentation.progress },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(8.dp),
             )
             
-            if (!isSynced && totalLogs > 0) {
+            presentation.detail?.let { detail ->
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "${(progress * 100).toInt()}% complete (${totalLogs - syncedLogs} logs remaining)",
+                    text = detail,
                     style = MaterialTheme.typography.bodySmall,
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

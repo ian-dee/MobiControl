@@ -9,13 +9,12 @@ import com.jwoglom.pumpx2.pump.messages.request.currentStatus.HistoryLogRequest
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.HistoryLogStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.HistoryLog
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.lang.Long.max
 import java.lang.Long.min
@@ -24,6 +23,21 @@ import java.time.ZoneId
 
 const val InitialHistoryLogCount = 5000
 const val FetchGroupTimeoutMs = 4000
+const val HistoryLogRequestBatchSize = 30
+const val HistoryLogRequestMaxAttempts = 3
+
+internal fun historyLogWindowStart(
+    firstSequenceNum: Long,
+    lastSequenceNum: Long,
+    maximumRecords: Long = InitialHistoryLogCount.toLong(),
+): Long {
+    require(maximumRecords > 0) { "History window size must be positive" }
+    if (lastSequenceNum < firstSequenceNum) return firstSequenceNum
+    return max(firstSequenceNum, lastSequenceNum - maximumRecords + 1)
+}
+
+internal fun historyLogWindowSize(firstSequenceNum: Long, lastSequenceNum: Long): Long =
+    if (lastSequenceNum < firstSequenceNum) 0 else lastSequenceNum - firstSequenceNum + 1
 
 class HistoryLogFetcher(
     private val historyLogRepo: HistoryLogRepo,
@@ -34,7 +48,8 @@ class HistoryLogFetcher(
     private val broadcastCallback: ((HistoryLogItem) -> Unit)? = null,
     private val requestDelayMs: Long = 1000,
     private val pollIntervalMs: Long = 500,
-    private val fetchGroupTimeoutMs: Long = FetchGroupTimeoutMs.toLong()
+    private val fetchGroupTimeoutMs: Long = FetchGroupTimeoutMs.toLong(),
+    private val requestMaxAttempts: Int = HistoryLogRequestMaxAttempts,
 ) : PumpHistoryLogFetcher {
     private var recentSeqIds = LruCache<Long, Long>(256)
     private var latestSeqId: Long = 0
@@ -42,6 +57,8 @@ class HistoryLogFetcher(
     private val triggerRangeMutex = Mutex()
     private val statusResponseLock = Mutex()
     private val streamResponseLock = Mutex()
+    private var pendingStatusResponse: HistoryLogStatusResponse? = null
+    private var statusSyncJob: Job? = null
     @Volatile
     private var cancelled = false
 
@@ -62,6 +79,8 @@ class HistoryLogFetcher(
 
     override fun cancel() {
         cancelled = true
+        pendingStatusResponse = null
+        statusSyncJob?.cancel()
     }
 
     private fun shouldContinue(): Boolean {
@@ -93,12 +112,7 @@ class HistoryLogFetcher(
             return
         }
         Timber.i("HistoryLogFetcher.triggerRange($startLog, $endLog)")
-        val chunkSize = 32
-        var num = 1
-        var totalNums = 1
-        for (i in startLog..endLog step chunkSize.toLong()) {
-            totalNums++
-        }
+        val chunkSize = HistoryLogRequestBatchSize
 
         var i = endLog
         while (i >= startLog) {
@@ -110,109 +124,159 @@ class HistoryLogFetcher(
             val startI = i - count + 1
             Timber.i("HistoryLogFetcher.triggerRangeStart $startI - $i ($count)")
 
-            // HistoryLogRequest returns items backward from the start ID,
-            // so we request from the END of the range to get all items in [startI, i]
-            request(i, count)
-
-            delay(requestDelayMs)
-
-            var waitTimeMs = 0L
-            while (true) {
-                if (!shouldContinue()) {
-                    Timber.i("HistoryLogFetcher.triggerRange poll stopping early at $startI - $i")
-                    return
-                }
-                delay(pollIntervalMs)
-                waitTimeMs += pollIntervalMs
-                val dbCount = historyLogRepo.getCount(pumpSid, startI, i).firstOrNull() ?: 0
-                Timber.d("HistoryLogFetcher dbCount=${dbCount} / count=$count")
-                if (dbCount >= count) {
-                    break
-                }
-                if (waitTimeMs >= fetchGroupTimeoutMs) {
-                    Timber.i("HistoryLogFetcher subset $startI - $i timed out: latest=$latestSeqId waitTime=$waitTimeMs")
-                    break
-                }
-            }
+            fetchChunkWithRetries(startI, i)
             Timber.i("HistoryLogFetcher.triggerRangeDone $startI - $i: latest=$latestSeqId")
-            num++
             i = startI - 1
         }
     }
+
+    /**
+     * Fetches one protocol-sized chunk and verifies the exact sequence IDs received. A response
+     * may contain fewer records than requested, so a count from the wider database is not enough
+     * to prove that this chunk is complete.
+     */
+    private suspend fun fetchChunkWithRetries(startLog: Long, endLog: Long) {
+        val maxAttempts = requestMaxAttempts.coerceAtLeast(1)
+        for (attempt in 1..maxAttempts) {
+            if (!shouldContinue()) return
+
+            val missingBeforeRequest = missingIdsInRange(startLog, endLog)
+            if (missingBeforeRequest.isEmpty()) return
+
+            // HistoryLogRequest returns records backward from the supplied end sequence number.
+            // Use the smallest contiguous span containing every still-missing ID so only one
+            // history request is in flight at a time. Any already-present IDs inside that span
+            // are harmless because the database key and stream cache deduplicate them.
+            val retryStart = missingBeforeRequest.first().first
+            val retryEnd = missingBeforeRequest.last().last
+            request(
+                start = retryEnd,
+                count = historyLogWindowSize(retryStart, retryEnd).toInt(),
+            )
+
+            if (awaitRangeComplete(startLog, endLog)) return
+
+            Timber.w(
+                "HistoryLogFetcher subset $startLog - $endLog incomplete after " +
+                    "attempt $attempt/$maxAttempts: missing=${missingIdsInRange(startLog, endLog)}",
+            )
+        }
+
+        Timber.w(
+            "HistoryLogFetcher subset $startLog - $endLog remains incomplete; " +
+                "a later status reconciliation will retry missing=${missingIdsInRange(startLog, endLog)}",
+        )
+    }
+
+    private suspend fun awaitRangeComplete(startLog: Long, endLog: Long): Boolean {
+        if (requestDelayMs > 0) delay(requestDelayMs)
+
+        var waitTimeMs = 0L
+        while (shouldContinue()) {
+            if (missingIdsInRange(startLog, endLog).isEmpty()) return true
+            if (waitTimeMs >= fetchGroupTimeoutMs) return false
+
+            val delayMs = pollIntervalMs.coerceAtLeast(1L)
+                .coerceAtMost((fetchGroupTimeoutMs - waitTimeMs).coerceAtLeast(1L))
+            delay(delayMs)
+            waitTimeMs += delayMs
+        }
+        return false
+    }
+
+    private fun missingIdsInRange(startLog: Long, endLog: Long): List<LongRange> =
+        getMissingIds(
+            present = historyLogRepo.getAllIds(pumpSid, startLog, endLog),
+            min = startLog,
+            max = endLog,
+        )
     override suspend fun onStatusResponse(message: HistoryLogStatusResponse, scope: CoroutineScope) {
         if (!shouldContinue()) return
         statusResponseLock.withLock {
-            Timber.i("HistoryLogFetcher.onStatusResponse<lock>")
-            onStatusResponseInternal(message, scope)
-            Timber.i("HistoryLogFetcher.onStatusResponse<unlock>")
+            pendingStatusResponse = message
+            if (statusSyncJob?.isActive == true) {
+                Timber.i(
+                    "HistoryLogFetcher.onStatusResponse: coalesced while catch-up is active " +
+                        "(latest=${message.lastSequenceNum})"
+                )
+                return@withLock
+            }
+            statusSyncJob = scope.launch { drainStatusResponses() }
         }
     }
 
-    private suspend fun onStatusResponseInternal(message: HistoryLogStatusResponse, scope: CoroutineScope) {
-        Timber.i("HistoryLogFetcher.onStatusResponse")
-        val dbLatest = historyLogRepo.getLatest(pumpSid).firstOrNull()
-        val dbLatestId = dbLatest?.seqId
-        val dbCount = historyLogRepo.getCount(pumpSid).firstOrNull() ?: 0
-        
-        val catchupThreshold = message.lastSequenceNum - InitialHistoryLogCount
-        var startId = when {
-            dbLatestId != null && dbLatestId >= catchupThreshold && dbLatestId <= message.lastSequenceNum -> {
-                // Use the catchup threshold if we have far fewer rows than expected,
-                // e.g. when a previous fetch was interrupted mid-way. The DB has the
-                // latest seq but is missing many older entries within the window.
-                val expectedCount = dbLatestId - catchupThreshold
-                if (expectedCount > 0 && dbCount < expectedCount / 2) {
-                    catchupThreshold
-                } else {
-                    dbLatestId
+    private suspend fun drainStatusResponses() {
+        while (shouldContinue()) {
+            val message = statusResponseLock.withLock {
+                val pending = pendingStatusResponse
+                if (pending == null) {
+                    statusSyncJob = null
+                    return
                 }
+                pendingStatusResponse = null
+                pending
             }
-            else -> catchupThreshold
+            onStatusResponseInternal(message)
         }
-
-        // don't try and fetch earlier than the first available seq number on the pump
-        // (this is not always 0; after a pump has been used for a long period old
-        // data is retentioned away and deleted while keeping id numbers consistent)
-        startId = max(startId, message.firstSequenceNum)
-        // ...or the latest sequence num
-        startId = min(startId, message.lastSequenceNum)
-
-        // should not be possible
-        if (startId < 0) {
-            startId = 0
+        statusResponseLock.withLock {
+            pendingStatusResponse = null
+            statusSyncJob = null
         }
+    }
 
-        val diffCount = message.lastSequenceNum - startId
+    private suspend fun onStatusResponseInternal(message: HistoryLogStatusResponse) {
+        Timber.i("HistoryLogFetcher.onStatusResponse")
+        val dbCount = historyLogRepo.getCount(pumpSid).firstOrNull() ?: 0
 
-        Timber.i("HistoryLogFetcher.onStatusResponse: db: $dbLatestId pump: ${message.lastSequenceNum} (diff: $diffCount)")
+        // Reconcile the complete requested window on every status response. Starting at the
+        // newest cached ID misses internal holes left by interrupted or partial batch responses.
+        val startId = historyLogWindowStart(
+            firstSequenceNum = message.firstSequenceNum,
+            lastSequenceNum = message.lastSequenceNum,
+        )
+
+        Timber.i(
+            "HistoryLogFetcher.onStatusResponse: reconciling $startId - " +
+                "${message.lastSequenceNum} (dbCount=$dbCount)",
+        )
 
         val allIds = historyLogRepo.getAllIds(pumpSid, startId, message.lastSequenceNum)
         val missingIds = getMissingIds(allIds, startId, message.lastSequenceNum)
-        var missingIdsTotal: Long = 0
-        missingIds.forEach {
-            missingIdsTotal += (it.last - it.first + 1)
-        }
+        val missingIdsTotal = missingIds.sumOf { historyLogWindowSize(it.first, it.last) }
 
         
         Timber.i("HistoryLogFetcher.onStatusResponse: missingIds=${missingIdsTotal} $missingIds")
 
-        scope.launch {
-            if (!shouldContinue()) {
-                Timber.i("HistoryLogFetcher.onStatusResponse: cancelled before launch")
-                return@launch
-            }
-            Timber.i("HistoryLogFetcher.onStatusResponse: launching ranges: $missingIds (dbCount=$dbCount)")
-            missingIds.reversed().forEach {
-                if (!shouldContinue()) {
-                    Timber.i("HistoryLogFetcher.onStatusResponse: cancelled during launch")
-                    return@launch
-                }
-                triggerRange(it.first, it.last)
-            }
-            Timber.i("HistoryLogFetcher.onStatusResponse: completed, fetched $missingIdsTotal")
-            val finalDbCount = historyLogRepo.getCount(pumpSid).firstOrNull() ?: 0
-            Timber.i("HistoryLogFetcher.onStatusResponse: completed, ${finalDbCount - dbCount} actual: $dbCount -> $finalDbCount")
+        if (!shouldContinue()) {
+            Timber.i("HistoryLogFetcher.onStatusResponse: cancelled before fetch")
+            return
         }
+        Timber.i("HistoryLogFetcher.onStatusResponse: fetching ranges: $missingIds (dbCount=$dbCount)")
+        missingIds.reversed().forEach {
+            if (!shouldContinue()) {
+                Timber.i("HistoryLogFetcher.onStatusResponse: cancelled during fetch")
+                return
+            }
+            triggerRange(it.first, it.last)
+        }
+
+        val remainingMissing = missingIdsInRange(startId, message.lastSequenceNum)
+        val remainingMissingTotal = remainingMissing.sumOf {
+            historyLogWindowSize(it.first, it.last)
+        }
+        if (remainingMissing.isEmpty()) {
+            Timber.i(
+                "HistoryLogFetcher.onStatusResponse: contiguous window complete; " +
+                    "requestedMissing=$missingIdsTotal",
+            )
+        } else {
+            Timber.w(
+                "HistoryLogFetcher.onStatusResponse: window incomplete; " +
+                    "remainingMissing=$remainingMissingTotal $remainingMissing",
+            )
+        }
+        val finalDbCount = historyLogRepo.getCount(pumpSid).firstOrNull() ?: 0
+        Timber.i("HistoryLogFetcher.onStatusResponse: completed, ${finalDbCount - dbCount} actual: $dbCount -> $finalDbCount")
     }
 
     override suspend fun onStreamResponse(log: HistoryLog) {
@@ -240,6 +304,7 @@ class HistoryLogFetcher(
 }
 
 fun getMissingIds(present: List<Long>, min: Long, max: Long): List<LongRange> {
+    if (max < min) return emptyList()
     if (present.isEmpty()) {
         return listOf(min..max)
     }

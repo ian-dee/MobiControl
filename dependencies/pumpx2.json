@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/ian-dee/pumpX2.git",
+  "revision": "9e40cf029e84bdb38168c976a41f69434275acb4",
+  "upstreamBase": "dad3eea2a3f6ae1bb1a6fdc6b3eac37f3ac7132b",
+  "version": "1.9.1",
+  "publicationStatus": "local-only; publish reviewed dependency revision before enabling remote CI"
+}

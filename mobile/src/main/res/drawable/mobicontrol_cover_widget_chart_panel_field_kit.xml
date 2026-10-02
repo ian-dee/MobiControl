@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient android:angle="270" android:startColor="#FF535B53" android:centerColor="#FF303B34" android:endColor="#FF242F29" />
+            <corners
+                android:topLeftRadius="8dp"
+                android:topRightRadius="8dp"
+                android:bottomLeftRadius="8dp"
+                android:bottomRightRadius="@dimen/mobicontrol_cover_widget_inner_outer_corner_radius" />
+            <stroke android:width="1dp" android:color="#FF17251E" />
+        </shape>
+    </item>
+    <item android:left="2dp" android:top="2dp" android:right="2dp" android:bottom="2dp">
+        <shape android:shape="rectangle">
+            <gradient android:angle="315" android:startColor="#FFE8EBDF" android:centerColor="#FFF2F2E8" android:endColor="#FFE0E5D8" />
+            <corners
+                android:topLeftRadius="6dp"
+                android:topRightRadius="6dp"
+                android:bottomLeftRadius="6dp"
+                android:bottomRightRadius="@dimen/mobicontrol_cover_widget_field_kit_inner_outer_corner_radius" />
+            <stroke android:width="1dp" android:color="#94111F17" />
+        </shape>
+    </item>
+</layer-list>

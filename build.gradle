@@ -2,14 +2,10 @@
 buildscript {
     ext {
         controlx2_version = "1.0.0-20260504"
-        pumpx2_version = "1.9.0"
-        use_local_pumpx2 = System.properties.getOrDefault('use_local_pumpx2', 'false') == 'true'
-        if (!use_local_pumpx2) {
-            Properties properties = new Properties()
-            properties.load(project.rootProject.file('local.properties').newDataInputStream())
-            use_local_pumpx2 = (properties.getProperty('use_local_pumpx2') ?: '') == 'true'
-        }
-        m2_repository = "${System.properties['user.home']}/.m2/repository"
+        pumpx2_version = "1.9.1"
+        // Always consume the reviewed source pin. Never fall back to upstream Maven artifacts.
+        use_local_pumpx2 = true
+        m2_repository = project.rootProject.file('.dependencies/maven').absolutePath
         compose_version = '1.7.8'
         androidx_watchface_version = '1.2.1'
         kotlin_version = "2.2.0"

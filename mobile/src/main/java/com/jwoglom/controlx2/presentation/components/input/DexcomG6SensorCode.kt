@@ -2,6 +2,7 @@ package com.jwoglom.controlx2.presentation.components.input
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
@@ -11,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -19,7 +21,9 @@ fun DexcomG6SensorCode(
     title: String,
     value: String?,
     onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    imeAction: ImeAction = ImeAction.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
     var error = false
 
@@ -37,7 +41,9 @@ fun DexcomG6SensorCode(
             autoCorrect = false,
             capitalization = KeyboardCapitalization.None,
             keyboardType = KeyboardType.Number,
+            imeAction = imeAction,
         ),
+        keyboardActions = keyboardActions,
         label = {
             Text(title)
         },
@@ -52,6 +58,7 @@ fun DexcomG6SensorCode(
         } else {
             OutlinedTextFieldDefaults.colors()
         },
+        singleLine = true,
         modifier = modifier.fillMaxWidth()
     )
 }

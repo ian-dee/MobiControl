@@ -1,0 +1,15 @@
+name: Feature proposal
+description: Propose a scoped change before implementation
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: User need and proposed scope
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Affected workflows, failure cases and verification plan
+    validations:
+      required: true

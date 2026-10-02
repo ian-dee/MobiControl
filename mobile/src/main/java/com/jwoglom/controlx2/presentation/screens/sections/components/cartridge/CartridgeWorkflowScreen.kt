@@ -40,6 +40,7 @@ fun CartridgeWorkflowScreen(
     innerPadding: PaddingValues = PaddingValues(),
     stepInfo: WizardStepInfo? = null,
     canCancel: Boolean = true,
+    cancelLabel: String = "Cancel",
     onCancel: () -> Unit,
     body: @Composable ColumnScope.() -> Unit,
     actions: @Composable ColumnScope.() -> Unit,
@@ -50,9 +51,15 @@ fun CartridgeWorkflowScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Normal)
+            Text(
+                title,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Normal,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
             TextButton(onClick = onCancel, enabled = canCancel) {
-                Text("Cancel")
+                Text(cancelLabel)
             }
         }
 

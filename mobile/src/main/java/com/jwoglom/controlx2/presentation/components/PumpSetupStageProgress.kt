@@ -19,6 +19,45 @@ import androidx.compose.ui.unit.dp
 import com.jwoglom.controlx2.LocalDataStore
 import com.jwoglom.controlx2.presentation.screens.PumpSetupStage
 
+internal const val PumpPairingStepCount = 8
+
+internal data class PumpPairingProgressPresentation(
+    val visible: Boolean,
+    val label: String = "",
+    val progress: Float = 0f,
+)
+
+/**
+ * The numbered progress indicator describes pump pairing only. Profile hydration and the
+ * optional clock decision happen after the secure pairing has already completed.
+ */
+internal fun pumpPairingProgressPresentation(
+    stage: PumpSetupStage?,
+    initialSetup: Boolean,
+): PumpPairingProgressPresentation {
+    if (stage == null || stage in setOf(
+            PumpSetupStage.PUMPX2_READING_PUMP_PROFILES,
+            PumpSetupStage.PUMPX2_PUMP_CONNECTED,
+            PumpSetupStage.PUMPX2_SET_PUMP_TIME,
+            PumpSetupStage.PUMPX2_SYNC_PUMP_DATA,
+            PumpSetupStage.PUMPX2_BACKGROUND_CONNECTION,
+        )
+    ) {
+        return PumpPairingProgressPresentation(visible = false)
+    }
+
+    if (!initialSetup) {
+        return PumpPairingProgressPresentation(visible = false)
+    }
+
+    val pairingStep = stage.step.coerceIn(0, PumpPairingStepCount)
+    return PumpPairingProgressPresentation(
+        visible = true,
+        label = "${stage.description} (stage $pairingStep of $PumpPairingStepCount)",
+        progress = pairingStep.toFloat() / PumpPairingStepCount.toFloat(),
+    )
+}
+
 @Composable
 fun PumpSetupStageProgress(
     initialSetup: Boolean = false,
@@ -26,21 +65,22 @@ fun PumpSetupStageProgress(
     val ds = LocalDataStore.current
     val setupStage = ds.pumpSetupStage.observeAsState()
 
-    var progress by remember { mutableStateOf(0.0f) }
+    val presentation = pumpPairingProgressPresentation(setupStage.value, initialSetup)
+    var progress by remember { mutableStateOf(presentation.progress) }
     val animatedProgress by animateFloatAsState(
         targetValue = progress,
         animationSpec = ProgressIndicatorDefaults.ProgressAnimationSpec
     )
-    LaunchedEffect (setupStage.value) {
-        progress = ((1.0 * (setupStage.value?.step ?: 0)) / PumpSetupStage.PUMPX2_PUMP_CONNECTED.step).toFloat()
+    LaunchedEffect(presentation.progress) {
+        progress = presentation.progress
     }
 
-    if (!initialSetup && setupStage.value == PumpSetupStage.PUMPX2_PUMP_CONNECTED) {
+    if (!presentation.visible) {
         return
     }
 
     Line(
-        "${setupStage.value?.description} (stage ${setupStage.value?.step ?: 0} of ${PumpSetupStage.PUMPX2_PUMP_CONNECTED.step})",
+        presentation.label,
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.padding(start = 10.dp, top = 10.dp)
     )

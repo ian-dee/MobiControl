@@ -1,0 +1,55 @@
+name: Source checks
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: source-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  privacy-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check publication boundaries
+        run: ruby tools/check-publication.rb
+      - name: Install checksum-pinned secret scanner
+        run: |
+          curl --fail --location --retry 3 --output /tmp/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz' | sha256sum --check
+          mkdir -p /tmp/mobicontrol-scanner
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp/mobicontrol-scanner gitleaks
+      - name: Scan modification history without printing secrets
+        run: /tmp/mobicontrol-scanner/gitleaks git --redact --log-opts='45e3795bad357472c1ff736dbfd7013e574dd28c..HEAD' .
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - name: Install build platforms
+        run: sdkmanager 'platforms;android-34' 'platforms;android-36' 'build-tools;35.0.0' 'build-tools;36.0.0'
+      - name: Build pinned dependency from source
+        run: bash tools/build-dependency.sh
+      - name: Build app and run unit tests
+        run: ./gradlew --no-daemon --no-build-cache --console=plain :mobile:assembleDebug testDebugUnitTest
+      - name: Run dependency tests
+        if: ${{ !cancelled() }}
+        working-directory: .dependencies/pumpX2
+        run: ./gradlew --no-daemon --no-build-cache --console=plain :androidLib:testDebugUnitTest :messages:test :shared:test

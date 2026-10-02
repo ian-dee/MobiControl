@@ -3,6 +3,8 @@ package com.jwoglom.controlx2
 import android.content.Context
 import android.content.SharedPreferences
 import com.jwoglom.controlx2.shared.enums.GlucoseUnit
+import com.jwoglom.controlx2.shared.ManualBolusOperation
+import com.jwoglom.controlx2.shared.BolusPermissionOperation
 import com.jwoglom.pumpx2.pump.messages.models.InsulinUnit
 
 /**
@@ -15,6 +17,28 @@ import com.jwoglom.pumpx2.pump.messages.models.InsulinUnit
  * the same `"WearX2"` SharedPreferences file but use disjoint key sets.
  */
 class WearPrefs(val context: Context) {
+
+    fun bolusPermissionOperation(): BolusPermissionOperation? =
+        prefs().getString("bolus-permission-operation-v1", null)
+            ?.toByteArray(Charsets.UTF_8)
+            ?.let(BolusPermissionOperation::decode)
+
+    fun setBolusPermissionOperation(operation: BolusPermissionOperation) {
+        prefs().edit()
+            .putString("bolus-permission-operation-v1", operation.encode().toString(Charsets.UTF_8))
+            .commit()
+    }
+
+    fun manualBolusOperation(): ManualBolusOperation? =
+        prefs().getString("manual-bolus-operation-v1", null)
+            ?.toByteArray(Charsets.UTF_8)
+            ?.let(ManualBolusOperation::decode)
+
+    fun setManualBolusOperation(operation: ManualBolusOperation) {
+        prefs().edit()
+            .putString("manual-bolus-operation-v1", operation.encode().toString(Charsets.UTF_8))
+            .commit()
+    }
 
     fun serviceEnabled(): Boolean {
         return prefs().getBoolean("service-enabled", false)
