@@ -5,6 +5,11 @@ from [ControlX2](https://github.com/jwoglom/controlX2) and uses
 [PumpX2](https://github.com/jwoglom/pumpX2) for pump communication.
 Maintained by [ian-dee](https://github.com/ian-dee). Not an official Tandem product.
 
+**Experimental prerelease:** [source and screenshots](https://github.com/ian-dee/MobiControl/tree/codex/publication-preparation)
+ · [APK and release notes](https://github.com/ian-dee/MobiControl/releases/tag/v1.0.0-01BD-preview.1).
+For development and isolated bench testing only, not a pump providing therapy.
+Licensing clarification and two dependency-test failures remain unresolved; see below.
+
 ## Purpose
 
 The project explores a customizable, glanceable pump interface designed around how people use
@@ -225,10 +230,14 @@ values as treatment settings. Do not connect an unvalidated build to a pump prov
 
 ## Publication status
 
-This source preparation is local pending licensing clarification and the final privacy review.
+The repository owner authorized publication of the privacy-reviewed source and an experimental
+debug APK on October 6, 2026. This is not a stable or clinically validated release.
 ControlX2's repository-wide license is unresolved; see [the maintainer inquiry](https://github.com/jwoglom/controlX2/issues/165).
-No license grant for ControlX2-derived code is implied by this README. PumpX2 is MIT licensed.
-The exact dependency commit must be published before the default bootstrap can fetch it.
+Publishing this fork does not resolve that question or imply a license grant for ControlX2-derived
+code. PumpX2 is MIT licensed, and its exact modified source is pinned in
+[`dependencies/pumpx2.json`](dependencies/pumpx2.json). Upstream attribution and notices are retained.
+Development branches are published separately from protected `main`; publication does not bypass
+required reviews or turn failing checks into passing checks.
 
 ## Development
 

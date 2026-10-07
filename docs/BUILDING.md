@@ -6,7 +6,7 @@ The Gradle wrapper downloads Gradle 9.2.1. No Tandem account, signing secret, de
 Maven cache is required for a debug build. A network connection is needed for public dependencies.
 
 ```sh
-git clone https://github.com/ian-dee/MobiControl.git
+git clone --branch codex/publication-preparation https://github.com/ian-dee/MobiControl.git
 cd MobiControl
 bash tools/build-dependency.sh
 ./gradlew --no-daemon :mobile:assembleDebug testDebugUnitTest
@@ -14,8 +14,8 @@ bash tools/build-dependency.sh
 
 The bootstrap reads `dependencies/pumpx2.json`, checks out that exact commit, and builds its
 libraries into `.dependencies/maven`. The app uses only that location; it does not silently
-substitute current upstream or the developer's `~/.m2` contents. To test the unpublished pin
-locally, set `PUMPX2_SOURCE` to a clean clone containing that exact commit before bootstrapping.
+substitute current upstream or the developer's `~/.m2` contents. To use a local source mirror,
+set `PUMPX2_SOURCE` to a clean clone containing that exact commit before bootstrapping.
 The override changes where Git obtains the commit, not which commit is accepted.
 
 Dependency verification (separate from artifact creation):
@@ -27,7 +27,12 @@ cd .dependencies/pumpX2
 
 The APK is `mobile/build/outputs/apk/debug/mobile-debug.apk`. Debug signing is not release
 signing. This workflow does not install it, connect a pump, publish an APK, or create a release.
-Do not distribute builds until licensing, privacy, test failures, and bench requirements are resolved.
+The owner approved one experimental public prerelease on October 6, 2026, despite unresolved
+licensing clarification and the documented dependency-test failures. That is not permission for
+automatic releases, stable distribution, or use with a pump providing therapy. Private data and
+private signing keys remain excluded. The inherited `debug.keystore` is byte-identical to the
+already-public upstream development key, not a private signing identity; never use it for secure
+production signing. The debug APK uses Android's local debug-signing configuration.
 
 Robolectric downloads its public Android framework dependencies automatically. Offline mode
 is opt-in with `-Drobolectric.offline=true` and requires pre-populated `~/.robolectric` files.

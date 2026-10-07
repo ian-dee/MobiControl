@@ -2,6 +2,11 @@
 
 Local source preparation is not permission to release an APK or a statement of medical validation.
 
+On October 6, 2026, the repository owner explicitly requested publication of the modified source
+and APK, rather than a documentation-only preview. This authorizes a single experimental prerelease
+with the unresolved licensing and test failures disclosed. It does not resolve the unchecked gates
+below, waive privacy review, or authorize merging protected `main` without its required checks/review.
+
 - [x] Preserve public upstream ancestry without importing private working history/tags.
 - [x] Replace captured preview profiles and pump-name examples with synthetic fixtures.
 - [x] Exclude private logs, screenshots, archives, machine configuration and bench notes.
@@ -13,9 +18,11 @@ Local source preparation is not permission to release an APK or a statement of m
 - [x] Prepare read-only build/test CI, contributor guidance, CODEOWNERS and issue/PR templates.
 - [x] Configure remote main-branch review/check protections and private vulnerability reporting.
 - [ ] Resolve ControlX2 repository-wide licensing with the maintainer (issue #165).
-- [ ] Complete final manual outgoing review, including all source/test fixtures and binary assets.
+- [x] Review outgoing source/test fixtures, synthetic screenshots and binary assets; rerun secret
+  and publication-boundary checks. The inherited development keystore matches public upstream;
+  no private signing key is an input. No scanner can guarantee absence of all sensitive information.
 - [ ] Resolve the two documented PumpX2 baseline test failures under a separately approved scope.
-- [ ] Publish only reviewed dependency/app branches, verify remote tree/metadata, then enable CI.
+- [ ] Publish only reviewed dependency/app branches and verify remote tree/metadata.
 - [ ] Observe both GitHub checks pass; resolve failures rather than bypassing them.
 
 Actions are currently disabled on the forks to prevent inherited publishing workflows from

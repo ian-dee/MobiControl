@@ -1,7 +1,8 @@
 # Known limitations and validation boundaries
 
-- Publication permission for ControlX2-derived code is awaiting clarification. No new app license
-  has been assigned. The dependency pin currently exists locally, not on the public fork.
+- Licensing permission for ControlX2-derived code is awaiting clarification. The repository owner
+  requested an experimental public prerelease while this remains unresolved; that does not grant
+  upstream rights or establish a repository-wide license. No new app license has been assigned.
 - The preserved PumpX2 base is intentionally older than current upstream. Do not assume newer
   upstream fixes are included. Dependency updates require review and targeted validation.
 - Initial clean dependency testing reports failures in `DailyStatusHistoryLogTest` and
@@ -14,4 +15,5 @@
 - Watch control remains disabled. A successful mobile build does not validate retained watch code.
 - Bench evidence is maintained privately. Public bug reports must use sanitized reproduction
   descriptions; never attach pairing codes, serial numbers, full support bundles or health histories.
-- CI has no signing/deployment credentials and does not produce a public APK release.
+- The published APK is a debuggable development build, not a production-signed or clinically
+  validated release. CI has no signing/deployment credentials and does not publish APKs.
