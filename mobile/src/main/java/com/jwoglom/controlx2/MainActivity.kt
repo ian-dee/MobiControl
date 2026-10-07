@@ -17,15 +17,17 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.app.ActivityCompat
+import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import com.google.common.base.Strings
@@ -38,17 +40,37 @@ import com.jwoglom.controlx2.db.historylog.HistoryLogRepo
 import com.jwoglom.controlx2.db.historylog.HistoryLogViewModel
 import com.jwoglom.controlx2.db.historylog.HistoryLogViewModelFactory
 import com.jwoglom.controlx2.presentation.DataStore
+import com.jwoglom.controlx2.presentation.authentication.DeviceAuthenticator
+import com.jwoglom.controlx2.presentation.PumpMessageEvent
+import com.jwoglom.controlx2.presentation.ProfileReadProgress
+import com.jwoglom.controlx2.presentation.PumpStateEvent
 import com.jwoglom.controlx2.presentation.MobileApp
 import com.jwoglom.controlx2.presentation.navigation.BolusInputPrefill
 import com.jwoglom.controlx2.presentation.navigation.Screen
 import com.jwoglom.controlx2.presentation.navigation.SheetLaunchRequest
 import com.jwoglom.controlx2.presentation.navigation.SheetLaunchTarget
 import com.jwoglom.controlx2.presentation.navigation.TempRateInputPrefill
+import com.jwoglom.controlx2.presentation.pairing.PumpPairingDiscoveryState
+import com.jwoglom.controlx2.presentation.pairing.nextMobiInstructionStage
+import com.jwoglom.controlx2.presentation.pairing.pairingSelectionStage
+import com.jwoglom.controlx2.presentation.simulation.applyDeveloperPreviewProfile
 import com.jwoglom.controlx2.presentation.screens.PumpSetupStage
+import com.jwoglom.controlx2.presentation.screens.sections.VerifiedPumpProfileCache
+import com.jwoglom.controlx2.presentation.screens.sections.evaluateMobiPumpSafetyLimits
+import com.jwoglom.controlx2.presentation.screens.sections.encodeVerifiedPumpProfileCache
 import com.jwoglom.controlx2.presentation.screens.sections.messagePairToJson
+import com.jwoglom.controlx2.presentation.screens.sections.profileSnapshots
 import com.jwoglom.controlx2.presentation.screens.sections.verbosePumpMessage
 import com.jwoglom.controlx2.presentation.util.ShouldLogToFile
 import com.jwoglom.controlx2.shared.MessagePaths
+import com.jwoglom.controlx2.shared.AutomaticBolusCancelResult
+import com.jwoglom.controlx2.shared.ManualBolusCancelResult
+import com.jwoglom.controlx2.shared.ManualBolusOperation
+import com.jwoglom.controlx2.shared.QuickBolusCancelResult
+import com.jwoglom.controlx2.shared.QuickBolusOperation
+import com.jwoglom.controlx2.shared.AuthenticatedPhoneBolusSubmission
+import com.jwoglom.controlx2.shared.BolusPermissionOperation
+import com.jwoglom.controlx2.shared.BolusPermissionOperationPhase
 import com.jwoglom.controlx2.shared.PumpMessageSerializer
 import com.jwoglom.pumpx2.shared.Hex
 import com.jwoglom.controlx2.shared.enums.DeviceRole
@@ -76,16 +98,43 @@ import com.jwoglom.pumpx2.pump.messages.models.InsulinUnit
 import com.jwoglom.pumpx2.pump.messages.models.NotificationBundle
 import com.jwoglom.pumpx2.pump.messages.models.StatusMessage
 import com.jwoglom.pumpx2.pump.messages.request.control.InitiateBolusRequest
-import com.jwoglom.pumpx2.pump.messages.request.control.RemoteBgEntryRequest
 import com.jwoglom.pumpx2.pump.messages.request.control.RemoteCarbEntryRequest
+import com.jwoglom.pumpx2.pump.messages.request.currentStatus.ProfileStatusRequest
 import com.jwoglom.pumpx2.pump.messages.response.control.BolusPermissionResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.BolusPermissionReleaseResponse
 import com.jwoglom.pumpx2.pump.messages.response.control.CancelBolusResponse
 import com.jwoglom.pumpx2.pump.messages.response.control.EnterChangeCartridgeModeResponse
 import com.jwoglom.pumpx2.pump.messages.response.control.EnterFillTubingModeResponse
 import com.jwoglom.pumpx2.pump.messages.response.control.ExitChangeCartridgeModeResponse
 import com.jwoglom.pumpx2.pump.messages.response.control.ExitFillTubingModeResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.FillCannulaResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.ResumePumpingResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SuspendPumpingResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.CgmHighLowAlertResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.CgmOutOfRangeAlertResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.CgmRiseFallAlertResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.RemoteBgEntryResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.DisconnectPumpResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.DismissNotificationResponse
 import com.jwoglom.pumpx2.pump.messages.response.control.InitiateBolusResponse
 import com.jwoglom.pumpx2.pump.messages.response.control.RemoteCarbEntryResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetDexcomG7PairingCodeResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetMaxBasalLimitResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetMaxBolusLimitResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetQuickBolusSettingsResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetSiteChangeReminderResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetSleepScheduleResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetTempRateResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.StopTempRateResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.ChangeControlIQSettingsResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.ChangeTimeDateResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.CreateIDPResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.DeleteIDPResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.RenameIDPResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetActiveIDPResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetIDPSegmentResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.SetIDPSettingsResponse
+import com.jwoglom.pumpx2.pump.messages.response.control.StopDexcomCGMSensorSessionResponse
 import com.jwoglom.pumpx2.pump.messages.response.controlStream.DetectingCartridgeStateStreamResponse
 import com.jwoglom.pumpx2.pump.messages.response.controlStream.EnterChangeCartridgeModeStateStreamResponse
 import com.jwoglom.pumpx2.pump.messages.response.controlStream.ExitFillTubingModeStateStreamResponse
@@ -93,13 +142,19 @@ import com.jwoglom.pumpx2.pump.messages.response.controlStream.FillCannulaStateS
 import com.jwoglom.pumpx2.pump.messages.response.controlStream.FillTubingStateStreamResponse
 import com.jwoglom.pumpx2.pump.messages.response.controlStream.PumpingStateStreamResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.BolusCalcDataSnapshotResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlertStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CGMStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CGMGlucoseAlertSettingsResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CGMOORAlertSettingsResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CGMRateAlertSettingsResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CgmStatusV2Response
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ControlIQIOBResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.BasalLimitSettingsResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ControlIQInfoAbstractResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ControlIQSleepScheduleResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBasalStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBatteryAbstractResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBatteryV2Response
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBolusStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentEGVGuiDataResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.GetSavedG7PairingCodeResponse
@@ -107,30 +162,37 @@ import com.jwoglom.pumpx2.pump.messages.response.currentStatus.GlobalMaxBolusSet
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.HistoryLogStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.HomeScreenMirrorResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.InsulinStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.IDPSegmentResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.IDPSettingsResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.LastBGResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.LastBolusStatusAbstractResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.LoadStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.RemindersResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.PumpGlobalsResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.TempRateResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.TimeSinceResetResponse
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.BolusDeliveryHistoryLog
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.Objects
 import java.util.function.Supplier
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.system.exitProcess
 
 
 var dataStore = DataStore()
 val LocalDataStore = compositionLocalOf { dataStore }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     companion object {
-        const val ACTION_OPEN_BOLUS = "com.jwoglom.controlx2.action.OPEN_BOLUS"
-        const val ACTION_OPEN_TEMP_RATE = "com.jwoglom.controlx2.action.OPEN_TEMP_RATE"
+        val ACTION_OPEN_BOLUS = "${BuildConfig.APPLICATION_ID}.action.OPEN_BOLUS"
+        val ACTION_OPEN_TEMP_RATE = "${BuildConfig.APPLICATION_ID}.action.OPEN_TEMP_RATE"
         const val EXTRA_OPEN_BOLUS = "open_bolus"
         const val EXTRA_OPEN_TEMP_RATE = "open_temp_rate"
         const val EXTRA_BOLUS_UNITS = "units"
@@ -141,13 +203,19 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_TEMP_RATE_MINUTES = "minutes"
 
         private const val REQUEST_BT_PERMISSIONS = 2
+        private const val SERVICE_SNAPSHOT_WITH_PROFILE = "include_profile"
     }
 
     private lateinit var messageBus: MessageBus
     private lateinit var messageListener: MessageListener
+    private var messageListenerRegistered = false
+    private var serviceSnapshotRequestedSinceStart = false
     private val sheetLaunchRequestState = mutableStateOf<SheetLaunchRequest?>(null)
     private var btPermissionsRequestInFlight = false
     private var notificationPermissionRequestInFlight = false
+    private val pumpMessageSequence = AtomicLong(0L)
+    private val pumpPairingDiscoveryState = PumpPairingDiscoveryState()
+    private lateinit var deviceAuthenticator: DeviceAuthenticator
 
     private val applicationScope = CoroutineScope(SupervisorJob())
     private val historyLogDb by lazy { HistoryLogDatabase.getDatabase(this) }
@@ -160,6 +228,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         Timber.d("mobile UIActivity onCreate $savedInstanceState")
         super.onCreate(savedInstanceState)
+        deviceAuthenticator = DeviceAuthenticator(this)
         setupTimber(
             "MUA",
             context = this,
@@ -174,26 +243,52 @@ class MainActivity : ComponentActivity() {
             sheetLaunchRequestState.value = parseSheetLaunchRequest(intent, "onCreate")
         }
 
+        // On a clean install the history ViewModel is created before pump discovery and therefore
+        // starts on SID -1. Keep it bound to the live pump SID so onboarding can transition to the
+        // real pump database partition without restarting the app (and the authenticated BLE link).
+        dataStore.pumpSid.observe(this) { pumpSid ->
+            if (!Prefs(applicationContext).developerPreviewEnabled()) {
+                historyLogViewModel.setPumpSid(pumpSid ?: -1)
+            }
+        }
+        if (Prefs(applicationContext).developerPreviewEnabled()) {
+            lifecycleScope.launch {
+                val importedHistoryPumpSid = withContext(Dispatchers.IO) {
+                    historyLogRepo.getMostRecentlyActivePumpSid()
+                }
+                if (importedHistoryPumpSid != null) {
+                    Timber.i(
+                        "Developer Preview selected imported history pump SID %d",
+                        importedHistoryPumpSid,
+                    )
+                    historyLogViewModel.setPumpSid(importedHistoryPumpSid)
+                } else {
+                    Timber.i("Developer Preview has no imported pump history; using samples")
+                }
+            }
+        }
+
         setContent {
             MobileApp(
                 startDestination = startDestination,
                 sendMessage = { path, message -> sendMessage(path, message) },
                 sendPumpCommands = { type, messages -> sendPumpCommands(type, messages) },
-                sendServiceBolusRequest = { bolusId, bolusParameters, unitBreakdown, dataSnapshot, timeSinceReset ->
+                sendServiceBolusRequest = { bolusId, bolusParameters, unitBreakdown, dataSnapshot, timeSinceReset, correctionEnabled, glucoseWasEnteredManually, maxHourlyBolusConfirmed, lowInsulinAcknowledged ->
                     sendServiceBolusRequest(
                         bolusId,
                         bolusParameters,
                         unitBreakdown,
                         dataSnapshot,
-                        timeSinceReset
+                        timeSinceReset,
+                        correctionEnabled,
+                        glucoseWasEnteredManually,
+                        maxHourlyBolusConfirmed,
+                        lowInsulinAcknowledged,
                     )
                 },
-                sendServiceBolusCancel = {
-                    sendMessage(
-                        MessagePaths.TO_SERVER_BOLUS_CANCEL,
-                        "".toByteArray()
-                    )
-                },
+                requestBolusAuthentication = deviceAuthenticator::authenticate,
+                requestSettingsAuthentication = deviceAuthenticator::authenticateSettings,
+                requestActionAuthentication = deviceAuthenticator::authenticateAction,
                 historyLogViewModel = historyLogViewModel,
                 sheetLaunchRequest = sheetLaunchRequestState.value,
                 onSheetLaunchHandled = { handledRequestId ->
@@ -212,6 +307,25 @@ class MainActivity : ComponentActivity() {
             // Default to mg/dL if not set
             dataStore.glucoseUnitPreference.value = GlucoseUnit.MGDL
         }
+        if (Prefs(applicationContext).developerPreviewEnabled()) {
+            val prefs = Prefs(applicationContext)
+            applyDeveloperPreviewProfile(
+                dataStore,
+                deliverySuspended = prefs.developerPreviewDeliverySuspended(),
+                controlIqMode = prefs.developerPreviewControlIqMode(),
+                controlIqEnabled = prefs.developerPreviewControlIqEnabled(),
+                controlIqWeightPounds = prefs.developerPreviewControlIqWeightPounds(),
+                controlIqTotalDailyInsulinUnits =
+                    prefs.developerPreviewControlIqTotalDailyInsulin(),
+                tempRate = prefs.developerPreviewTempRate(),
+                maxBolusMilliunits = prefs.developerPreviewMaxBolusMilliunits(),
+                basalLimitMilliunits = prefs.developerPreviewBasalLimitMilliunits(),
+            )
+        }
+        dataStore.manualBolusOperation.value = Prefs(applicationContext).manualBolusOperation()
+        dataStore.quickBolusOperation.value = Prefs(applicationContext).quickBolusOperation()
+        dataStore.bolusPermissionOperation.value =
+            Prefs(applicationContext).bolusPermissionOperation()
 
         // Always initialize MessageBus (factory handles Play Services fallback internally)
         messageBus = MessageBusFactory.createMessageBus(this)
@@ -220,7 +334,6 @@ class MainActivity : ComponentActivity() {
                 handleMessageReceived(path, data, sourceNodeId)
             }
         }
-        messageBus.addMessageListener(messageListener)
         // Show warning dialog if Play Services missing (non-blocking)
         checkPlayServicesAndInitialize()
 
@@ -252,7 +365,9 @@ class MainActivity : ComponentActivity() {
 //            mApiClient.connect()
 //        }
 
-        if (!Prefs(applicationContext).tosAccepted()) {
+        if (Prefs(applicationContext).developerPreviewEnabled()) {
+            Timber.i("BTPermissionsCheck not started in developer preview")
+        } else if (!Prefs(applicationContext).tosAccepted()) {
             Timber.i("BTPermissionsCheck not started because TOS not accepted")
         } else if (!Prefs(applicationContext).serviceEnabled()) {
             Timber.i("BTPermissionsCheck not started because service not enabled")
@@ -262,29 +377,70 @@ class MainActivity : ComponentActivity() {
             startBTPermissionsCheck()
         }
 
-        // Request service status when resuming, in case app was started in background
-        if (dataStore.pumpSetupStage.value == PumpSetupStage.WAITING_PUMP_FINDER_INIT &&
-            Prefs(applicationContext).serviceEnabled()) {
-            Timber.i("onResume: requesting service status (currently in WAITING_PUMP_FINDER_INIT)")
-            sendMessage(MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS, "".toByteArray())
-        }
-
         super.onResume()
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (::messageBus.isInitialized && ::messageListener.isInitialized &&
+            !messageListenerRegistered) {
+            messageBus.addMessageListener(messageListener)
+            messageListenerRegistered = true
+            Timber.i("MainActivity UI message listener registered")
+        }
+        requestAuthoritativeServiceSnapshot()
+    }
+
     override fun onStop() {
+        unregisterUiMessageListener()
+        serviceSnapshotRequestedSinceStart = false
         super.onStop()
     }
 
     override fun onDestroy() {
-        if (::messageBus.isInitialized && ::messageListener.isInitialized) {
-            messageBus.removeMessageListener(messageListener)
-        }
+        unregisterUiMessageListener()
         super.onDestroy()
     }
 
+    private fun unregisterUiMessageListener() {
+        if (::messageBus.isInitialized && ::messageListener.isInitialized &&
+            messageListenerRegistered) {
+            messageBus.removeMessageListener(messageListener)
+            messageListenerRegistered = false
+            Timber.i("MainActivity UI message listener unregistered")
+        }
+    }
+
+    private fun resetProfileReadState() {
+        dataStore.idpManager.value = IDPManager()
+        dataStore.profileReadProgress.value = ProfileReadProgress()
+        dataStore.initialProfileReadError.value = null
+        dataStore.profileReadCompletedAtEpochMillis.value = null
+    }
+
+    /**
+     * Requests the current service-owned connection state only after this Activity can receive the
+     * reply. A complete profile snapshot is retained across an Activity recreation; a missing or
+     * incomplete snapshot is restarted from ProfileStatus so later IDP responses cannot be applied
+     * out of order.
+     */
+    private fun requestAuthoritativeServiceSnapshot() {
+        if (!messageListenerRegistered || serviceSnapshotRequestedSinceStart ||
+            !Prefs(applicationContext).serviceEnabled()) {
+            return
+        }
+        val includeProfile = dataStore.pumpConnected.value != true ||
+            dataStore.idpManager.value?.isComplete != true
+        val payload = if (includeProfile) SERVICE_SNAPSHOT_WITH_PROFILE else ""
+        serviceSnapshotRequestedSinceStart = true
+        Timber.i("Requesting authoritative service snapshot (includeProfile=$includeProfile)")
+        sendMessage(MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS, payload.toByteArray())
+    }
+
     private fun startCommServiceWithPreconditions() {
-        if (!Prefs(applicationContext).tosAccepted()) {
+        if (Prefs(applicationContext).developerPreviewEnabled()) {
+            Timber.i("commService not started in developer preview")
+        } else if (!Prefs(applicationContext).tosAccepted()) {
             Timber.i("commService not started because first TOS not accepted")
         } else if (!Prefs(applicationContext).serviceEnabled()) {
             Timber.i("commService not started because service not enabled")
@@ -348,8 +504,9 @@ class MainActivity : ComponentActivity() {
             //retrieve an instance of the service here from the IBinder returned
             //from the onBind method to communicate with
             Timber.i("CommService onServiceConnected")
-            // Request service status now that we're ready to receive it
-            sendMessage(MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS, "".toByteArray())
+            // onStart registers the listener before requesting the snapshot. If binding completed
+            // unusually late, this is a no-op because the start-scoped request was already sent.
+            requestAuthoritativeServiceSnapshot()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -398,12 +555,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun sendMessage(path: String, message: ByteArray) {
-        Timber.i("mobile sendMessage: $path ${String(message)}")
+        Timber.i("mobile sendMessage: $path ${MessagePaths.payloadForLog(path, message)}")
         messageBus.sendMessage(path, message, MessageBusSender.MOBILE_UI)
     }
 
     private fun sendPumpCommands(type: SendType, msgs: List<Message>) {
         if (msgs.isEmpty()) return
+        if (Prefs(applicationContext).developerPreviewEnabled()) {
+            Timber.w("Ignoring pump commands in developer preview: %s", msgs)
+            return
+        }
         if (dataStore.pumpConnected.value != true) {
             Timber.w("Skipping sendPumpCommands while pump disconnected: %s", msgs)
             return
@@ -419,72 +580,80 @@ class MainActivity : ComponentActivity() {
         sendMessage("${MessagePaths.PREFIX_TO_PUMP}${type.slug}", PumpMessageSerializer.toBulkBytes(msgs))
     }
 
-    private fun sendServiceBolusRequest(bolusId: Int, params: BolusParameters, unitBreakdown: BolusCalcUnits, dataSnapshot: BolusCalcDataSnapshotResponse, timeSinceReset: TimeSinceResetResponse) {
-        val numUnits = InsulinUnit.from1To1000(params.units)
+    private fun sendServiceBolusRequest(
+        bolusId: Int,
+        params: BolusParameters,
+        unitBreakdown: BolusCalcUnits,
+        dataSnapshot: BolusCalcDataSnapshotResponse,
+        timeSinceReset: TimeSinceResetResponse,
+        correctionEnabled: Boolean,
+        glucoseWasEnteredManually: Boolean,
+        maxHourlyBolusConfirmed: Boolean,
+        lowInsulinAcknowledged: Boolean,
+    ) {
+        if (Prefs(applicationContext).developerPreviewEnabled()) {
+            Timber.w("Ignoring bolus request in developer preview")
+            return
+        }
+        val maxBolusUnits = InsulinUnit.from1000To1(dataSnapshot.maxBolusAmount.toLong())
+        if (!params.units.isFinite() || params.units < 0.05 || params.units > maxBolusUnits) {
+            Timber.e(
+                "Refusing bolus outside current pump limits: requested=%s max=%s",
+                params.units,
+                maxBolusUnits,
+            )
+            return
+        }
+        val safetyRequirements = evaluateMobiPumpSafetyLimits(
+            requestedUnits = params.units,
+            cartridgeRemainingInsulinUnits = dataSnapshot.cartridgeRemainingInsulin,
+            maxBolusAmountMilliunits = dataSnapshot.maxBolusAmount,
+            maxBolusHourlyTotalMilliunits = dataSnapshot.maxBolusHourlyTotal,
+            maxBolusEventsExceeded = dataSnapshot.maxBolusEventsExceeded,
+        )
+        if (safetyRequirements.maxHourly != null && !maxHourlyBolusConfirmed) {
+            Timber.e("Refusing bolus because Max Hourly Bolus was not confirmed")
+            return
+        }
+        if (safetyRequirements.lowInsulin != null && !lowInsulinAcknowledged) {
+            Timber.e("Refusing bolus because the Low Insulin warning was not acknowledged")
+            return
+        }
         val numCarbs = params.carbsGrams
         val bgValue = params.glucoseMgdl
 
-        val bolusTypes = mutableListOf(BolusDeliveryHistoryLog.BolusType.FOOD2)
-
-        val foodVolume = InsulinUnit.from1To1000(unitBreakdown.fromCarbs)
-        if (foodVolume > 0) {
-            bolusTypes.add(BolusDeliveryHistoryLog.BolusType.FOOD1)
-        }
-
-        var corrVolume = InsulinUnit.from1To1000(unitBreakdown.fromBG) + InsulinUnit.from1To1000(unitBreakdown.fromIOB)
-        if (corrVolume > 0) {
-            bolusTypes.add(BolusDeliveryHistoryLog.BolusType.CORRECTION)
-        } else {
-            corrVolume = 0 // negative correction volume is not passed through
-        }
-
-        val preCommands: MutableList<Message> = mutableListOf()
-        if (bgValue > 0 && timeSinceReset.pumpTimeSecondsSinceReset > 0) {
-            val autopopBg = when {
-                !dataSnapshot.isAutopopAllowed -> false
-                dataSnapshot.correctionFactor == 0 -> false
-                bgValue != dataSnapshot.correctionFactor -> false
-                else -> true
-            }
-            val remoteBgRequest = RemoteBgEntryRequest(
-                bgValue,
-                false, // useForCgmCalibration
-                autopopBg,
-                timeSinceReset.pumpTimeSecondsSinceReset,
-                bolusId
-            )
-            Timber.i("sendServiceBolusRequest: sending remoteBgRequest=$remoteBgRequest")
-            preCommands.add(remoteBgRequest)
-        }
-
-        if (numCarbs > 0 && timeSinceReset.pumpTimeSecondsSinceReset > 0) {
-            val remoteCarbRequest = RemoteCarbEntryRequest(
-                numCarbs,
-                timeSinceReset.pumpTimeSecondsSinceReset,
-                bolusId
-            )
-            Timber.i("sendServiceBolusRequest: sending remoteCarbRequest=$remoteCarbRequest")
-            preCommands.add(remoteCarbRequest)
-        }
-
-        if (preCommands.isNotEmpty()) {
-            this.sendPumpCommands(SendType.STANDARD, preCommands)
-        }
-
-        val iobUnits = dataSnapshot.iob
-        val bolusRequest = InitiateBolusRequest(
-            numUnits,
-            bolusId,
-            BolusDeliveryHistoryLog.BolusType.toBitmask(*bolusTypes.toTypedArray()),
-            foodVolume,
-            corrVolume,
-            numCarbs,
-            bgValue,
-            iobUnits
+        val corrVolume = plannedCorrectionVolumeMilliunits(
+            unitBreakdown,
+            correctionEnabled = correctionEnabled,
         )
 
-        Timber.i("sendServiceBolusRequest: numUnits=$numUnits numCarbs=$numCarbs bgValue=$bgValue foodVolume=$foodVolume corrVolume=$corrVolume iobUnits=$iobUnits: bolusRequest=$bolusRequest preCommands=$preCommands")
-        this.sendMessage(MessagePaths.TO_SERVER_BOLUS_REQUEST_PHONE, PumpMessageSerializer.toBytes(bolusRequest))
+        val iobUnits = dataSnapshot.iob
+        val bolusRequest = createInitiateBolusRequest(
+            totalUnits = params.units,
+            bolusId = bolusId,
+            foodUnits = unitBreakdown.fromCarbs,
+            correctionVolumeMilliunits = corrVolume,
+            carbsGrams = numCarbs,
+            bgMgdl = bgValue,
+            iobMilliunits = iobUnits,
+        )
+
+        val submission = AuthenticatedPhoneBolusSubmission(
+            request = bolusRequest,
+            postBolusRecords = createPostBolusRecordPlan(
+                bgValue = bgValue,
+                carbsGrams = numCarbs,
+                bolusId = bolusId,
+                dataSnapshot = dataSnapshot,
+                glucoseWasEnteredManually = glucoseWasEnteredManually,
+            ),
+        )
+        Timber.i(
+            "sendServiceBolusRequest: numUnits=${bolusRequest.totalVolume} numCarbs=$numCarbs bgValue=$bgValue " +
+                "foodVolume=${bolusRequest.foodVolume} correctionEnabled=$correctionEnabled corrVolume=$corrVolume " +
+                "iobUnits=$iobUnits: bolusRequest=$bolusRequest; post-initiation records are staged",
+        )
+        this.sendMessage(MessagePaths.TO_SERVER_BOLUS_REQUEST_PHONE, submission.encode())
     }
 
 
@@ -531,8 +700,8 @@ class MainActivity : ComponentActivity() {
 
     // Message received from Wear or CommService via MessageBus
     private fun handleMessageReceived(path: String, data: ByteArray, sourceNodeId: String) {
-        Timber.i("phone messageReceived: $path: ${String(data)} from $sourceNodeId")
-        val inInitialSetupFlow = !Prefs(applicationContext).pumpSetupComplete() || !Prefs(applicationContext).appSetupComplete()
+        Timber.i("phone messageReceived: $path: ${MessagePaths.payloadForLog(path, data)} from $sourceNodeId")
+        val inInitialSetupFlow = !Prefs(applicationContext).pumpSetupComplete()
         when (path) {
             MessagePaths.TO_SERVER_START_COMM -> {
                 when (String(data)) {
@@ -589,6 +758,13 @@ class MainActivity : ComponentActivity() {
             }
 
             MessagePaths.TO_SERVER_PUMP_FINDER_STARTED -> {
+                if (dataStore.pumpSetupStage.value == PumpSetupStage.WAITING_PUMP_FINDER_INIT) {
+                    pumpPairingDiscoveryState.reset()
+                    dataStore.pumpFinderPumps.value = emptyList()
+                    dataStore.selectedPumpFinderMac.value = null
+                    dataStore.setupDeviceName.value = null
+                    dataStore.pumpReadyState.value = null
+                }
                 if (inInitialSetupFlow) {
                     dataStore.pumpSetupStage.value = dataStore.pumpSetupStage.value?.nextStage(PumpSetupStage.PUMP_FINDER_SEARCHING_FOR_PUMPS)
                 } else {
@@ -596,39 +772,67 @@ class MainActivity : ComponentActivity() {
                 }
                 // Acknowledge receipt to stop periodic sender
                 sendMessage(MessagePaths.TO_SERVER_SERVICE_STATUS_ACKNOWLEDGED, "".toByteArray())
+                // Rehydrate the current in-memory scan after activity/process recreation. The
+                // finder replays only its current generation and never persisted readiness.
+                sendMessage(MessagePaths.TO_SERVER_CHECK_PUMP_FINDER_FOUND_PUMPS, "".toByteArray())
             }
 
             MessagePaths.FROM_PUMP_PUMP_FINDER_FOUND_PUMPS -> {
-                dataStore.pumpFinderPumps.value = String(data).split(";").map {
-                    Pair(it.substringBefore("="), it.substringAfter("="))
-                }
+                val nowElapsedRealtimeMillis = SystemClock.elapsedRealtime()
+                val candidates = pumpPairingDiscoveryState.observeFoundPumpsPayload(
+                    payload = String(data),
+                    nowElapsedRealtimeMillis = nowElapsedRealtimeMillis,
+                )
+                dataStore.pumpFinderPumps.value = candidates
                 if (dataStore.pumpSetupStage.value == PumpSetupStage.PUMP_FINDER_SEARCHING_FOR_PUMPS) {
-                    dataStore.pumpSetupStage.value = dataStore.pumpSetupStage.value?.nextStage(PumpSetupStage.PUMP_FINDER_SELECT_PUMP)
+                    pairingSelectionStage(candidates, nowElapsedRealtimeMillis)?.let { selectionStage ->
+                        dataStore.pumpSetupStage.value = selectionStage
+                    }
                 }
             }
 
             MessagePaths.FROM_PUMP_PUMP_FINDER_PUMP_DISCOVERED -> {
                 val payload = String(data)
-                val discoveredKey = payload.substringBefore(";;")
-                val discoveredName = discoveredKey.substringBefore("=")
-                val discoveredMac = Strings.emptyToNull(discoveredKey.substringAfter("=", "")) ?: ""
-                val readyStateRaw = Strings.emptyToNull(payload.substringAfter(";;", "UNKNOWN")) ?: "UNKNOWN"
-                val readyState = try {
-                    PumpReadyState.valueOf(readyStateRaw)
-                } catch (_: IllegalArgumentException) {
-                    PumpReadyState.UNKNOWN
-                }
-
-                Timber.i("pump-finder-pump-discovered: name=$discoveredName mac=$discoveredMac readyState=$readyState")
-                if (dataStore.setupDeviceName.value == null || dataStore.setupDeviceName.value == discoveredName) {
-                    dataStore.setupDeviceName.value = discoveredName
-                    dataStore.pumpReadyState.value = readyState
+                val nowElapsedRealtimeMillis = SystemClock.elapsedRealtime()
+                val candidate = pumpPairingDiscoveryState.observeDiscoveredPayload(
+                    payload = payload,
+                    nowElapsedRealtimeMillis = nowElapsedRealtimeMillis,
+                )
+                if (candidate == null) {
+                    Timber.w("pump-finder-pump-discovered: ignored malformed discovery payload")
+                } else {
+                    Timber.i(
+                        "pump-finder-pump-discovered: name=%s mac=%s readyState=%s",
+                        candidate.name ?: "unnamed",
+                        candidate.address,
+                        candidate.readyState,
+                    )
+                    val candidates = pumpPairingDiscoveryState.candidates()
+                    dataStore.pumpFinderPumps.value = candidates
+                    val routedMobiStage = nextMobiInstructionStage(
+                        currentStage = dataStore.pumpSetupStage.value,
+                        candidate = candidate,
+                        nowElapsedRealtimeMillis = nowElapsedRealtimeMillis,
+                        allCandidates = candidates,
+                    )
+                    when {
+                        routedMobiStage != null -> dataStore.pumpSetupStage.value = routedMobiStage
+                        dataStore.pumpSetupStage.value == PumpSetupStage.PUMP_FINDER_SEARCHING_FOR_PUMPS -> {
+                            pairingSelectionStage(candidates, nowElapsedRealtimeMillis)?.let { selectionStage ->
+                                dataStore.pumpSetupStage.value = selectionStage
+                            }
+                        }
+                    }
+                    if (dataStore.selectedPumpFinderMac.value == candidate.address) {
+                        candidate.name?.let { dataStore.setupDeviceName.value = it }
+                        dataStore.pumpReadyState.value = candidate.readyState
+                    }
                 }
             }
 
             MessagePaths.TO_SERVER_SET_PAIRING_CODE -> {
                 val pairingCodeText = String(data)
-                Toast.makeText(applicationContext, "Set pairing code: $pairingCodeText", Toast.LENGTH_SHORT).show()
+                Toast.makeText(applicationContext, "Pairing code saved", Toast.LENGTH_SHORT).show()
                 when (dataStore.pumpSetupStage.value) {
                     PumpSetupStage.WAITING_PUMP_FINDER_CLEANUP -> {
                         Prefs(applicationContext).setPumpFinderServiceEnabled(false)
@@ -697,7 +901,7 @@ class MainActivity : ComponentActivity() {
             }
 
             MessagePaths.FROM_PUMP_INVALID_PAIRING_CODE -> {
-                Timber.w("invalid-pairing-code with code: ${PumpState.getPairingCode(applicationContext)}")
+                Timber.w("Pump rejected the pairing code")
                 PumpState.setPairingCode(applicationContext, "")
                 dataStore.pumpSetupStage.value = dataStore.pumpSetupStage.value?.nextStage(PumpSetupStage.PUMPX2_INVALID_PAIRING_CODE)
                 sendMessage(MessagePaths.TO_SERVER_STOP_COMM, "invalid_pairing_code".toByteArray())
@@ -708,11 +912,29 @@ class MainActivity : ComponentActivity() {
                 dataStore.pumpCriticalError.value = Pair(String(data), Instant.now())
             }
 
+            MessagePaths.FROM_PUMP_INITIAL_PROFILE_READ_FAILED -> {
+                dataStore.initialProfileReadError.value = String(data)
+            }
+
             MessagePaths.FROM_PUMP_PUMP_CONNECTED -> {
-                dataStore.pumpSetupStage.value = dataStore.pumpSetupStage.value?.nextStage(PumpSetupStage.PUMPX2_PUMP_CONNECTED)
+                val isNewConnectionForUi = dataStore.pumpConnected.value != true
+                if (isNewConnectionForUi) {
+                    dataStore.pumpSetupStage.value = dataStore.pumpSetupStage.value?.nextStage(
+                        if (inInitialSetupFlow) {
+                            PumpSetupStage.PUMPX2_READING_PUMP_PROFILES
+                        } else {
+                            PumpSetupStage.PUMPX2_PUMP_CONNECTED
+                        },
+                    )
+                }
                 dataStore.setupDeviceName.value = String(data)
                 extractPumpSid(String(data))?.let {
                     dataStore.pumpSid.value = it
+                }
+                if (isNewConnectionForUi) {
+                    // A profile snapshot belongs to one live pump connection. Duplicate service
+                    // snapshots must not erase an already-complete read for that connection.
+                    resetProfileReadState()
                 }
                 dataStore.pumpConnected.value = true
                 dataStore.pumpLastConnectionTimestamp.value = Instant.now()
@@ -720,18 +942,24 @@ class MainActivity : ComponentActivity() {
 
             // on explicit disconnection
             MessagePaths.FROM_PUMP_PUMP_DISCONNECTED -> {
-                dataStore.pumpSetupStage.value = dataStore.pumpSetupStage.value?.nextStage(PumpSetupStage.PUMPX2_PUMP_DISCONNECTED)
+                val isNewDisconnectionForUi = dataStore.pumpConnected.value != false
+                if (isNewDisconnectionForUi) {
+                    dataStore.pumpSetupStage.value = dataStore.pumpSetupStage.value?.nextStage(PumpSetupStage.PUMPX2_PUMP_DISCONNECTED)
+                    resetProfileReadState()
+                }
                 dataStore.setupDeviceModel.value = String(data)
                 dataStore.pumpConnected.value = false
             }
 
             // on implicit disconnection (i.e. we didn't get the explicit disconnect)
             MessagePaths.FROM_PUMP_PUMP_NOT_CONNECTED -> {
-                if (dataStore.pumpConnected.value == true) {
-                    Timber.i("tracked implicit disconnection (before pump-disconnected)")
+                val isNewDisconnectionForUi = dataStore.pumpConnected.value != false
+                if (isNewDisconnectionForUi) {
+                    Timber.i("tracked authoritative implicit disconnection: ${String(data)}")
                     dataStore.pumpSetupStage.value = dataStore.pumpSetupStage.value?.nextStage(PumpSetupStage.PUMPX2_PUMP_DISCONNECTED)
-                    dataStore.pumpConnected.value = false
+                    resetProfileReadState()
                 }
+                dataStore.pumpConnected.value = false
             }
 
             MessagePaths.TO_SERVER_BOLUS_CONFIRM_DIALOG -> {
@@ -763,6 +991,64 @@ class MainActivity : ComponentActivity() {
                 dataStore.pumpLastMessageTimestamp.value = Instant.now()
             }
 
+            MessagePaths.TO_CLIENT_AUTOMATIC_BOLUS_CANCEL_RESULT -> {
+                AutomaticBolusCancelResult.decode(data)?.let {
+                    dataStore.automaticBolusCancelResult.value = it
+                } ?: Timber.e("Invalid automatic bolus cancellation result")
+            }
+
+            MessagePaths.TO_CLIENT_MANUAL_BOLUS_CANCEL_RESULT -> {
+                ManualBolusCancelResult.decode(data)?.let {
+                    dataStore.manualBolusCancelResult.value = it
+                } ?: Timber.e("Invalid manual bolus cancellation result")
+            }
+
+            MessagePaths.TO_CLIENT_MANUAL_BOLUS_OPERATION -> {
+                ManualBolusOperation.decode(data)?.let {
+                    Prefs(applicationContext).setManualBolusOperation(it)
+                    dataStore.manualBolusOperation.value = it
+                } ?: Timber.e("Invalid manual bolus operation")
+            }
+
+            MessagePaths.TO_CLIENT_QUICK_BOLUS_CANCEL_RESULT -> {
+                QuickBolusCancelResult.decode(data)?.let {
+                    dataStore.quickBolusCancelResult.value = it
+                } ?: Timber.e("Invalid Quick Bolus cancellation result")
+            }
+
+            MessagePaths.TO_CLIENT_QUICK_BOLUS_OPERATION -> {
+                QuickBolusOperation.decode(data)?.let {
+                    Prefs(applicationContext).setQuickBolusOperation(it)
+                    dataStore.quickBolusOperation.value = it
+                } ?: Timber.e("Invalid Quick Bolus operation")
+            }
+
+            MessagePaths.TO_CLIENT_PUMP_HYDRATION_STATE -> {
+                com.jwoglom.controlx2.shared.PumpHydrationState.decode(data)?.let {
+                    dataStore.pumpHydrationState.value = it
+                } ?: Timber.e("Invalid pump hydration state")
+            }
+
+            MessagePaths.TO_CLIENT_BOLUS_PERMISSION_OPERATION -> {
+                BolusPermissionOperation.decode(data)?.let {
+                    Prefs(applicationContext).setBolusPermissionOperation(it)
+                    dataStore.bolusPermissionOperation.value = it
+                    if (it.phase in setOf(
+                            BolusPermissionOperationPhase.REQUESTING,
+                            BolusPermissionOperationPhase.RELEASED,
+                            BolusPermissionOperationPhase.DENIED,
+                            BolusPermissionOperationPhase.INITIATION_REJECTED,
+                            BolusPermissionOperationPhase.INITIATION_REJECTED_OUTCOME_UNKNOWN,
+                        )
+                    ) {
+                        // A response object from an earlier workflow must never authorize the
+                        // newly opened workflow or remain visible after that permission ended.
+                        dataStore.bolusPermissionResponse.value = null
+                        PumpStateSupplier.inProgressBolusId = Supplier { null }
+                    }
+                } ?: Timber.e("Invalid bolus permission operation")
+            }
+
             MessagePaths.FROM_PUMP_DEBUG_MESSAGE_CACHE -> {
                 val processed = PumpMessageSerializer.fromDebugMessageCacheBytes(data)
                 dataStore.debugMessageCache.value = processed
@@ -781,6 +1067,95 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onPumpMessageReceived(message: Message, cached: Boolean) {
+        val eventSequence = pumpMessageSequence.incrementAndGet()
+        val eventReceivedAt = Instant.now()
+        dataStore.latestPumpMessageSequence.value = eventSequence
+        when (message) {
+            is TimeSinceResetResponse -> dataStore.timeSinceResetEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is LoadStatusResponse -> dataStore.loadStatusEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is RemindersResponse -> dataStore.remindersEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is FillCannulaResponse -> dataStore.fillCannulaResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is EnterFillTubingModeResponse -> dataStore.enterFillTubingModeResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is ExitFillTubingModeResponse -> dataStore.exitFillTubingModeResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is ResumePumpingResponse -> dataStore.resumePumpingResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is SuspendPumpingResponse -> dataStore.suspendPumpingResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is DisconnectPumpResponse -> dataStore.disconnectPumpResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is DismissNotificationResponse -> dataStore.dismissNotificationResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is FillCannulaStateStreamResponse -> dataStore.fillCannulaStateEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is SetSiteChangeReminderResponse -> dataStore.siteChangeReminderResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CGMStatusResponse -> dataStore.cgmStatusEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CgmStatusV2Response -> dataStore.cgmStatusV2Event.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is HomeScreenMirrorResponse -> dataStore.homeScreenMirrorEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CurrentEGVGuiDataResponse -> dataStore.currentEgvEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is AlertStatusResponse -> dataStore.alertStatusEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is SetDexcomG7PairingCodeResponse -> dataStore.setG7PairingCodeResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is GetSavedG7PairingCodeResponse -> dataStore.savedG7PairingCodeEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is StopDexcomCGMSensorSessionResponse -> dataStore.stopCgmSessionResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is RemoteBgEntryResponse -> dataStore.remoteBgEntryResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CGMGlucoseAlertSettingsResponse -> dataStore.cgmGlucoseAlertSettingsEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CGMRateAlertSettingsResponse -> dataStore.cgmRateAlertSettingsEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CGMOORAlertSettingsResponse -> dataStore.cgmOutOfRangeAlertSettingsEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CgmHighLowAlertResponse -> dataStore.cgmHighLowAlertResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CgmRiseFallAlertResponse -> dataStore.cgmRiseFallAlertResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CgmOutOfRangeAlertResponse -> dataStore.cgmOutOfRangeAlertResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is ControlIQInfoAbstractResponse -> dataStore.controlIqInfoEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is ControlIQSleepScheduleResponse -> dataStore.controlIqSleepScheduleEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is ChangeControlIQSettingsResponse ->
+                dataStore.changeControlIqSettingsResponseEvent.value =
+                    PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is SetSleepScheduleResponse -> dataStore.setSleepScheduleResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is ChangeTimeDateResponse -> dataStore.changeTimeDateResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is SetTempRateResponse -> dataStore.setTempRateResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is SetQuickBolusSettingsResponse ->
+                dataStore.setQuickBolusSettingsResponseEvent.value =
+                    PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is PumpGlobalsResponse -> dataStore.pumpGlobalsEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is StopTempRateResponse -> dataStore.stopTempRateResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is TempRateResponse -> dataStore.tempRateResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
+            is CreateIDPResponse,
+            is DeleteIDPResponse,
+            is RenameIDPResponse,
+            is SetActiveIDPResponse,
+            is SetIDPSegmentResponse,
+            is SetIDPSettingsResponse -> dataStore.profileMutationResponseEvent.value =
+                PumpMessageEvent(eventSequence, eventReceivedAt, message as StatusMessage, cached)
+        }
+
         if (dataStore.debugPromptAwaitingResponses.value?.contains(message.javaClass.name) == true) {
             synchronized (dataStore.debugPromptAwaitingResponses) {
                 val awaiting = dataStore.debugPromptAwaitingResponses.value ?: mutableSetOf()
@@ -807,11 +1182,23 @@ class MainActivity : ComponentActivity() {
                 .show()
         }
 
+        // Preserve delivery-limit write responses for the Safety Limits screen before the generic
+        // status handler returns on a pump rejection.
+        when (message) {
+            is SetMaxBolusLimitResponse -> dataStore.setMaxBolusLimitResponse.value = message
+            is SetMaxBasalLimitResponse -> dataStore.setMaxBasalLimitResponse.value = message
+        }
+
         // Always process error handlers first
         when (message) {
             is StatusMessage -> {
                 if (!message.isStatusOK) {
-                    unsuccessfulAlert(message.messageName())
+                    // Notification dismissal has its own response-aware UI. A generic dialog here
+                    // cannot identify the notification and previously reported rejected duplicate
+                    // requests even after the first request succeeded.
+                    if (message !is DismissNotificationResponse) {
+                        unsuccessfulAlert(message.messageName())
+                    }
                     return
                 }
             }
@@ -822,18 +1209,50 @@ class MainActivity : ComponentActivity() {
                 val updated = (dataStore.notificationBundle.value ?: NotificationBundle()).add(message)
                 // re-create to trigger state update via object change
                 dataStore.notificationBundle.value = NotificationBundle(updated)
+                dataStore.notificationStatusEvent.value =
+                    PumpMessageEvent(eventSequence, eventReceivedAt, message, cached)
             }
         }
 
         if (IDPManager.isIDPManagerResponse(message)) {
             synchronized(dataStore.idpManager) {
-                val updated = (dataStore.idpManager.value ?: IDPManager()).processMessage(message)
+                val currentManager = dataStore.idpManager.value ?: IDPManager()
+                val awaitingProfileStatus =
+                    currentManager.nextMessages().firstOrNull() is ProfileStatusRequest
+                if (awaitingProfileStatus &&
+                    (message is IDPSettingsResponse || message is IDPSegmentResponse)) {
+                    Timber.w(
+                        "Ignoring out-of-order %s while awaiting ProfileStatusResponse",
+                        message.messageName(),
+                    )
+                    return
+                }
+                dataStore.initialProfileReadError.value = null
+                val wasComplete = currentManager.isComplete
+                dataStore.profileReadProgress.value =
+                    (dataStore.profileReadProgress.value ?: ProfileReadProgress()).process(message)
+                val updated = currentManager.processMessage(message)
                 // re-create to trigger state update via object change
                 val newIdpManager = IDPManager(updated)
                 dataStore.idpManager.value = newIdpManager
 
                 // Upload profile to Nightscout when all profile data is loaded
-                if (newIdpManager.isComplete) {
+                if (newIdpManager.isComplete && !wasComplete) {
+                    val completedAt = System.currentTimeMillis()
+                    dataStore.profileReadCompletedAtEpochMillis.value = completedAt
+                    persistVerifiedPumpProfileSnapshot(newIdpManager, completedAt)
+                    if (!Prefs(applicationContext).pumpSetupComplete()) {
+                        val completedStage = if (
+                            Prefs(applicationContext).onboardingTimeDecisionComplete()
+                        ) {
+                            PumpSetupStage.PUMPX2_SYNC_PUMP_DATA
+                        } else {
+                            PumpSetupStage.PUMPX2_PUMP_CONNECTED
+                        }
+                        dataStore.pumpSetupStage.value = dataStore.pumpSetupStage.value?.nextStage(
+                            completedStage,
+                        )
+                    }
                     com.jwoglom.controlx2.sync.nightscout.NightscoutSyncWorker
                         .uploadProfileIfRunning(newIdpManager)
                 }
@@ -842,6 +1261,9 @@ class MainActivity : ComponentActivity() {
         when (message) {
             is CurrentBatteryAbstractResponse -> {
                 dataStore.batteryPercent.value = message.batteryPercent
+                if (message is CurrentBatteryV2Response) {
+                    dataStore.batteryCharging.value = message.isCharging
+                }
             }
             is ControlIQIOBResponse -> {
                 dataStore.iobUnits.value = InsulinUnit.from1000To1(message.pumpDisplayedIOB)
@@ -879,9 +1301,12 @@ class MainActivity : ComponentActivity() {
             }
             is InsulinStatusResponse -> {
                 dataStore.cartridgeRemainingUnits.value = message.currentInsulinAmount
+                dataStore.cartridgeRemainingEstimateFlag.value = message.isEstimate
+                dataStore.cartridgeRemainingEstimate.value = message.isEstimate != 0
+                dataStore.cartridgeLowAlertUnits.value = message.insulinLowAmount
             }
             is LastBolusStatusAbstractResponse -> {
-
+                dataStore.lastBolusSource.value = message.bolusSource
                 dataStore.lastBolusStatus.value = if (message.timestamp > 0)
                     "${twoDecimalPlaces1000Unit(message.deliveredVolume)}u at ${shortTime(pumpTimeToLocalTz(message.timestampInstant))}"
                 else
@@ -913,7 +1338,7 @@ class MainActivity : ComponentActivity() {
                     else -> "IN_RANGE"
                 }
                 dataStore.cgmDeltaArrow.value = message.cgmTrendIcon.arrow()
-                dataStore.basalStatus.value = when (message.basalStatusIcon) {
+                val basalStatus = when (message.basalStatusIcon) {
                     HomeScreenMirrorResponse.BasalStatusIcon.BASAL -> BasalStatus.ON
                     HomeScreenMirrorResponse.BasalStatusIcon.ZERO_BASAL -> BasalStatus.ZERO
                     HomeScreenMirrorResponse.BasalStatusIcon.TEMP_RATE -> BasalStatus.TEMP_RATE
@@ -924,6 +1349,12 @@ class MainActivity : ComponentActivity() {
                     HomeScreenMirrorResponse.BasalStatusIcon.ATTENUATED_BASAL -> BasalStatus.CONTROLIQ_REDUCED
                     else -> BasalStatus.UNKNOWN
                 }
+                dataStore.basalStatus.value = basalStatus
+                dataStore.basalStatusEvent.value = PumpStateEvent(
+                    eventSequence,
+                    eventReceivedAt,
+                    basalStatus,
+                )
                 dataStore.cartridgeRemainingEstimate.value = message.remainingInsulinPlusIcon
             }
             is CurrentBasalStatusResponse -> {
@@ -962,9 +1393,51 @@ class MainActivity : ComponentActivity() {
                     else -> ""
                 }
             }
+            is CgmStatusV2Response -> {
+                val previousSensorStart = dataStore.cgmStatusV2Response.value
+                    ?.sensorStartedTimestamp
+                dataStore.cgmStatusV2Response.value = message
+                dataStore.cgmSessionState.value = when (message.sessionState) {
+                    CgmStatusV2Response.SessionState.SESSION_ACTIVE -> CGMSessionState.ACTIVE
+                    CgmStatusV2Response.SessionState.STATUS_STOPPED -> CGMSessionState.STOPPED
+                    CgmStatusV2Response.SessionState.STATUS_START_PENDING -> CGMSessionState.STARTING
+                    CgmStatusV2Response.SessionState.SESSION_STOP_PENDING -> CGMSessionState.STOPPING
+                    else -> null
+                }
+                if (message.sessionState != CgmStatusV2Response.SessionState.SESSION_ACTIVE ||
+                    (previousSensorStart != null &&
+                        previousSensorStart != message.sensorStartedTimestamp)
+                ) {
+                    // Keep chart history in the database, but never let an old session's cached
+                    // current value survive into pairing/startup or a replacement sensor.
+                    dataStore.cgmReadingSensorStartedTimestamp.value = null
+                }
+                dataStore.cgmTransmitterStatus.value = when (message.transmitterBatteryStatus) {
+                    CgmStatusV2Response.TransmitterBatteryStatus.ERROR -> "Error"
+                    CgmStatusV2Response.TransmitterBatteryStatus.EXPIRED -> "Expired"
+                    CgmStatusV2Response.TransmitterBatteryStatus.OKAY -> "OK"
+                    CgmStatusV2Response.TransmitterBatteryStatus.OUT_OF_RANGE -> "OOR"
+                    else -> ""
+                }
+            }
+            is CGMGlucoseAlertSettingsResponse -> {
+                dataStore.cgmGlucoseAlertSettingsResponse.value = message
+            }
+            is CGMRateAlertSettingsResponse -> {
+                dataStore.cgmRateAlertSettingsResponse.value = message
+            }
+            is CGMOORAlertSettingsResponse -> {
+                dataStore.cgmOutOfRangeAlertSettingsResponse.value = message
+            }
             is CurrentEGVGuiDataResponse -> {
                 dataStore.cgmReading.value = message.cgmReading
                 dataStore.cgmDelta.value = message.trendRate
+                dataStore.cgmReadingSensorStartedTimestamp.value =
+                    dataStore.cgmStatusV2Response.value
+                        ?.takeIf {
+                            it.sessionState == CgmStatusV2Response.SessionState.SESSION_ACTIVE
+                        }
+                        ?.sensorStartedTimestamp
             }
             is GetSavedG7PairingCodeResponse -> {
                 dataStore.savedG7PairingCode.value = message.pairingCode
@@ -989,7 +1462,15 @@ class MainActivity : ComponentActivity() {
             }
             is BolusPermissionResponse -> {
                 dataStore.bolusPermissionResponse.value = message
-                PumpStateSupplier.inProgressBolusId = Supplier { message.bolusId }
+                PumpStateSupplier.inProgressBolusId = Supplier {
+                    message.bolusId.takeIf { message.isPermissionGranted && it > 0 }
+                }
+            }
+            is BolusPermissionReleaseResponse -> {
+                if (message.releaseStatus == BolusPermissionReleaseResponse.ReleaseStatus.SUCCESS) {
+                    dataStore.bolusPermissionResponse.value = null
+                    PumpStateSupplier.inProgressBolusId = Supplier { null }
+                }
             }
             is RemoteCarbEntryResponse -> {
                 dataStore.bolusCarbEntryResponse.value = message
@@ -1014,6 +1495,9 @@ class MainActivity : ComponentActivity() {
             }
             is LoadStatusResponse -> {
                 dataStore.loadStatusResponse.value = message
+            }
+            is RemindersResponse -> {
+                dataStore.remindersResponse.value = message
             }
 
             is EnterChangeCartridgeModeStateStreamResponse -> {
@@ -1062,7 +1546,44 @@ class MainActivity : ComponentActivity() {
                     dataStore.inFillTubingMode.value = false
                 }
             }
+            is ResumePumpingResponse -> {
+                // The shared delivery-transition coordinator owns this correlated result and
+                // fresh-state reconciliation. Avoid a second generic failure dialog.
+            }
+            is SuspendPumpingResponse -> {
+                // The shared delivery-transition coordinator owns this correlated result and
+                // fresh-state reconciliation. Avoid a second generic failure dialog.
+            }
 
+        }
+    }
+
+    private fun persistVerifiedPumpProfileSnapshot(
+        manager: IDPManager,
+        verifiedAtEpochMillis: Long,
+    ) {
+        val prefs = Prefs(applicationContext)
+        val pumpSid = dataStore.pumpSid.value?.takeIf { it >= 0 }
+            ?: prefs.currentPumpSid().takeIf { it >= 0 }
+        if (pumpSid == null) {
+            Timber.w("Initial profile snapshot is complete but no pump SID is available for cache isolation")
+            return
+        }
+
+        runCatching {
+            val snapshot = VerifiedPumpProfileCache(
+                pumpSid = pumpSid,
+                verifiedAtEpochMillis = verifiedAtEpochMillis,
+                profiles = profileSnapshots(manager),
+            )
+            prefs.setVerifiedPumpProfileCacheJson(
+                encodeVerifiedPumpProfileCache(snapshot),
+                pumpSid,
+            )
+        }.onSuccess {
+            Timber.i("Cached pump-verified profile snapshot for pump SID $pumpSid")
+        }.onFailure {
+            Timber.e(it, "Unable to cache pump-verified profile snapshot")
         }
     }
 
@@ -1456,13 +1977,12 @@ class MainActivity : ComponentActivity() {
         val prefs = Prefs(applicationContext)
         return when {
             !prefs.tosAccepted() -> Screen.FirstLaunch.route
+            prefs.developerPreviewEnabled() -> Screen.Landing.route
             // In CLIENT mode the watch handles pump pairing — the phone has no
             // pump-finder service running, so PumpSetup would wait forever.
             prefs.deviceRole() == DeviceRole.CLIENT ->
-                if (!prefs.appSetupComplete()) Screen.AppSetup.route
-                else Screen.Landing.route
+                Screen.Landing.route
             !prefs.pumpSetupComplete() -> Screen.PumpSetup.route
-            !prefs.appSetupComplete() -> Screen.AppSetup.route
             else -> Screen.Landing.route
         }
     }

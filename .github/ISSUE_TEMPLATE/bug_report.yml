@@ -1,0 +1,26 @@
+name: Bug report
+description: Report a reproducible problem without private data
+body:
+  - type: markdown
+    attributes:
+      value: Do not post pump identifiers, pairing codes, raw logs, private screenshots or health data. Use synthetic examples.
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps and expected versus observed behavior
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: App revision and Android version (no serial numbers)
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Reproduction environment
+      options:
+        - Emulator / synthetic data
+        - Isolated bench
+        - Other (describe without private data)

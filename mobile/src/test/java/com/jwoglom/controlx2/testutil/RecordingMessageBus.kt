@@ -41,6 +41,7 @@ class RecordingMessageBus : MessageBus {
 
     val sentMessages = CopyOnWriteArrayList<SentMessage>()
     private val listeners = CopyOnWriteArrayList<MessageListener>()
+    val listenerCount: Int get() = listeners.size
 
     private val localNode = MessageNode(
         id = "test-node",

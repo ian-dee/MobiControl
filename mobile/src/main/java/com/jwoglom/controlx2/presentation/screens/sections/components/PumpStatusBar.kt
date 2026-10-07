@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Sync
@@ -28,39 +29,76 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.jwoglom.controlx2.LocalDataStore
-import com.jwoglom.controlx2.presentation.components.Line
 import com.jwoglom.controlx2.presentation.screens.setUpPreviewState
 import com.jwoglom.controlx2.presentation.theme.CardBackground
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
 import com.jwoglom.controlx2.presentation.theme.Elevation
 import com.jwoglom.controlx2.presentation.theme.Spacing
 import com.jwoglom.controlx2.presentation.theme.SurfaceBackground
+import com.jwoglom.controlx2.presentation.theme.MobiControlTheme
+import com.jwoglom.controlx2.presentation.theme.SkinPanel
+import com.jwoglom.controlx2.presentation.theme.SkinPanelVariant
+import com.jwoglom.controlx2.shared.PumpHydrationPhase
+import com.jwoglom.controlx2.shared.PumpHydrationState
+import com.jwoglom.controlx2.shared.util.shortTimeAgo
+import java.time.Instant
 
 @Composable
 fun PumpStatusBar(middleContent: @Composable () -> Unit = {}) {
     val ds = LocalDataStore.current
+    val tokens = MobiControlTheme.tokens
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Spacing.Small),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Box (Modifier.padding(horizontal = 8.dp)) {
+    val content: @Composable () -> Unit = {
+        Box(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier.align(Alignment.CenterStart),
+            contentAlignment = Alignment.CenterStart,
+        ) {
             val batteryPercent = ds.batteryPercent.observeAsState()
             val batteryCharging = ds.batteryCharging.observeAsState()
             HorizBatteryIcon(batteryPercent.value, batteryCharging.value)
         }
 
-        Box {
+        Box(
+            modifier = Modifier.align(Alignment.Center),
+            contentAlignment = Alignment.Center,
+        ) {
             middleContent()
         }
 
-        Box (Modifier.padding(horizontal = 8.dp)) {
+        Box(
+            modifier = Modifier.align(Alignment.CenterEnd),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
             val cartridgeRemainingUnits = ds.cartridgeRemainingUnits.observeAsState()
             val cartridgeRemainingEstimate = ds.cartridgeRemainingEstimate.observeAsState()
+            val cartridgeLowAlertUnits = ds.cartridgeLowAlertUnits.observeAsState()
             HorizCartridgeIcon(cartridgeRemainingUnits.value,
-                cartridgeAmountEstimate = cartridgeRemainingEstimate.value == true)
+                cartridgeAmountEstimate = cartridgeRemainingEstimate.value == true,
+                lowAlertUnits = cartridgeLowAlertUnits.value ?: CartridgeLowUnits,
+            )
+        }
+        }
+    }
+
+    if (tokens.usesTechnicalChrome) {
+        SkinPanel(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = Spacing.Small),
+            variant = SkinPanelVariant.RAISED,
+        ) {
+            Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                content()
+            }
+        }
+    } else {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = Spacing.Small),
+        ) {
+            content()
         }
     }
 }
@@ -73,6 +111,10 @@ fun PumpStatusCard(
     val batteryPercent = ds.batteryPercent.observeAsState()
     val cartridgeRemainingUnits = ds.cartridgeRemainingUnits.observeAsState()
     val cartridgeRemainingEstimate = ds.cartridgeRemainingEstimate.observeAsState()
+    val cartridgeLowAlertUnits = ds.cartridgeLowAlertUnits.observeAsState()
+    val pumpConnected = ds.pumpConnected.observeAsState()
+    val pumpHydration = ds.pumpHydrationState.observeAsState()
+    val pumpLastMessage = ds.pumpLastMessageTimestamp.observeAsState()
 
     Card(
         modifier = modifier
@@ -92,13 +134,13 @@ fun PumpStatusCard(
             // Battery
             StatusIndicatorItem(
                 icon = {
-                    HorizBatteryIcon(batteryPercent.value)
+                    HorizBatteryIcon(batteryPercent.value, showValue = false)
                 },
                 label = "Battery",
                 value = "${batteryPercent.value ?: "--"}%"
             )
 
-            // Connection time (placeholder for now)
+            // Connection and live-state freshness.
             StatusIndicatorItem(
                 icon = {
                     Icon(
@@ -108,8 +150,12 @@ fun PumpStatusCard(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 },
-                label = "Updated",
-                value = "Now"  // TODO: Format last connection time
+                label = "Pump status",
+                value = pumpStatusFreshnessText(
+                    pumpConnected = pumpConnected.value == true,
+                    hydrationState = pumpHydration.value,
+                    lastMessageAt = pumpLastMessage.value,
+                ),
             )
 
             // Insulin
@@ -117,14 +163,31 @@ fun PumpStatusCard(
                 icon = {
                     HorizCartridgeIcon(
                         cartridgeRemainingUnits.value,
-                        cartridgeAmountEstimate = cartridgeRemainingEstimate.value == true
+                        cartridgeAmountEstimate = cartridgeRemainingEstimate.value == true,
+                        lowAlertUnits = cartridgeLowAlertUnits.value ?: CartridgeLowUnits,
+                        showValue = false,
                     )
                 },
                 label = "Insulin",
-                value = "${cartridgeRemainingUnits.value ?: "--"}U"
+                value = cartridgeLevelText(
+                    cartridgeRemainingUnits.value,
+                    cartridgeRemainingEstimate.value == true,
+                ),
             )
         }
     }
+}
+
+internal fun pumpStatusFreshnessText(
+    pumpConnected: Boolean,
+    hydrationState: PumpHydrationState?,
+    lastMessageAt: Instant?,
+): String = when {
+    !pumpConnected -> "Disconnected"
+    hydrationState?.phase == PumpHydrationPhase.LIVE_STATE_LOADING -> "Refreshing"
+    hydrationState?.phase == PumpHydrationPhase.LIVE_STATE_PARTIAL -> "Partial"
+    lastMessageAt == null -> "Waiting"
+    else -> shortTimeAgo(lastMessageAt, nowThresholdSeconds = 1)
 }
 
 @Composable
@@ -139,7 +202,9 @@ private fun StatusIndicatorItem(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
-            modifier = Modifier.size(32.dp),
+            modifier = Modifier
+                .width(68.dp)
+                .height(34.dp),
             contentAlignment = Alignment.Center
         ) {
             icon()
@@ -170,8 +235,9 @@ internal fun PumpStatusBarDefaultPreview() {
             color = Color.White,
         ) {
             setUpPreviewState(LocalDataStore.current)
+            LocalDataStore.current.batteryCharging.value = false
             PumpStatusBar(middleContent = {
-                Line("Last updated: stub", bold = true)
+                PreviewConnectionTimestamp("Updated\nstub")
             })
         }
     }
@@ -202,9 +268,50 @@ internal fun PumpStatusBarCharging() {
             LocalDataStore.current.batteryCharging.value = true
             setUpPreviewState(LocalDataStore.current)
             PumpStatusBar(middleContent = {
-                Line("Last updated: stub", bold = true)
+                PreviewConnectionTimestamp("Updated\nstub")
             })
 
         }
     }
+}
+
+@Preview(showBackground = true)
+@Composable
+internal fun PumpStatusBarLowInsulinPreview() {
+    ControlX2Theme {
+        Surface(color = Color.White) {
+            setUpPreviewState(LocalDataStore.current)
+            LocalDataStore.current.batteryCharging.value = false
+            LocalDataStore.current.batteryPercent.value = 47
+            LocalDataStore.current.cartridgeRemainingUnits.value = CartridgeLowUnits
+            PumpStatusBar(middleContent = {
+                PreviewConnectionTimestamp("Updated\nnow")
+            })
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+internal fun PumpStatusBarLowBatteryPreview() {
+    ControlX2Theme {
+        Surface(color = Color.White) {
+            setUpPreviewState(LocalDataStore.current)
+            LocalDataStore.current.batteryCharging.value = false
+            LocalDataStore.current.batteryPercent.value = BatteryLowPercent
+            LocalDataStore.current.cartridgeRemainingUnits.value = 100
+            PumpStatusBar(middleContent = {
+                PreviewConnectionTimestamp("Updated\nnow")
+            })
+        }
+    }
+}
+
+@Composable
+private fun PreviewConnectionTimestamp(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+    )
 }

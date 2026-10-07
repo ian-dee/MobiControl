@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient android:angle="270" android:startColor="#FF3E4442" android:centerColor="#FF303735" android:endColor="#FF292F2E" />
+            <corners android:radius="@dimen/mobicontrol_cover_widget_outer_radius" />
+            <stroke android:width="1dp" android:color="#FF17251E" />
+        </shape>
+    </item>
+    <item android:left="3dp" android:top="3dp" android:right="3dp" android:bottom="3dp">
+        <shape android:shape="rectangle">
+            <gradient android:angle="270" android:startColor="#FFF4F2E9" android:centerColor="#FFECEBE1" android:endColor="#FFD8D9D1" />
+            <corners android:radius="@dimen/mobicontrol_cover_widget_enamel_radius" />
+            <stroke android:width="1dp" android:color="#99858D80" />
+        </shape>
+    </item>
+</layer-list>

@@ -20,7 +20,7 @@ fun LandingBuildInfo() {
     Text(
         buildAnnotatedString {
             withStyle(style = SpanStyle(fontWeight = FontWeight.Bold, fontSize = 12.sp)) {
-                append("ControlX2 ")
+                append("MobiControl ")
                 append(BuildConfig.VERSION_NAME)
             }
             append("\n")

@@ -16,6 +16,14 @@ data class HistoryLogTypeStats(
 @Dao
 interface HistoryLogDao {
     @Query("""
+        SELECT pumpSid FROM $HistoryLogTable
+        GROUP BY pumpSid
+        ORDER BY MAX(pumpTimeSec) DESC, MAX(seqId) DESC
+        LIMIT 1
+    """)
+    fun getMostRecentlyActivePumpSid(): Int?
+
+    @Query("""
         SELECT COUNT(seqId) FROM $HistoryLogTable
         WHERE pumpSid = :pumpSid
     """)
@@ -141,6 +149,21 @@ interface HistoryLogDao {
         ORDER BY seqId ASC
     """)
     fun getItemsForTypesSince(pumpSid: Int, typeIds: List<Int>, minPumpTimeSec: Long): Flow<List<HistoryLogItem>>
+
+    @Query("""
+        SELECT * FROM $HistoryLogTable
+        WHERE pumpSid = :pumpSid
+        AND typeId IN(:typeIds)
+        AND pumpTimeSec >= :minPumpTimeSec
+        AND pumpTimeSec <= :maxPumpTimeSec
+        ORDER BY pumpTimeSec DESC, seqId DESC
+    """)
+    fun getItemsForTypesInTimeRange(
+        pumpSid: Int,
+        typeIds: List<Int>,
+        minPumpTimeSec: Long,
+        maxPumpTimeSec: Long,
+    ): Flow<List<HistoryLogItem>>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(historyLogItem: HistoryLogItem)

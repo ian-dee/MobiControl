@@ -31,8 +31,10 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/pump"
+        android:enabled="false"
+        android:icon="@mipmap/mobicontrol_launcher"
         android:label="@string/app_name"
+        android:roundIcon="@mipmap/mobicontrol_launcher"
         android:supportsRtl="true"
         android:theme="@style/SplashTheme"
         android:debuggable="true"
@@ -52,7 +54,7 @@
 
         <activity
             android:name=".MainActivity"
-            android:icon="@drawable/pump"
+            android:icon="@mipmap/mobicontrol_launcher"
             android:exported="true"
             android:label="@string/app_name"
             android:launchMode="singleTask">
@@ -96,7 +98,7 @@
             android:name=".complications.PumpBatteryComplicationDataSourceService"
             android:exported="true"
             android:icon="@drawable/pump"
-            android:label="ControlX2 Pump Battery"
+            android:label="MobiControl Pump Battery"
             android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
@@ -114,7 +116,7 @@
             android:name=".complications.PumpIOBComplicationDataSourceService"
             android:exported="true"
             android:icon="@drawable/pump"
-            android:label="ControlX2 Pump IOB"
+            android:label="MobiControl Pump IOB"
             android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
@@ -132,7 +134,7 @@
             android:name=".complications.CGMReadingComplicationDataSourceService"
             android:exported="true"
             android:icon="@drawable/pump"
-            android:label="ControlX2 CGM Reading"
+            android:label="MobiControl CGM Reading"
             android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
@@ -150,7 +152,7 @@
             android:name=".complications.BolusButtonComplicationDataSourceService"
             android:exported="true"
             android:icon="@drawable/bolus_icon"
-            android:label="ControlX2 Bolus Button"
+            android:label="MobiControl Bolus Button"
             android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
@@ -165,7 +167,7 @@
             android:name=".complications.PumpButtonComplicationDataSourceService"
             android:exported="true"
             android:icon="@drawable/pump"
-            android:label="ControlX2 App Button"
+            android:label="MobiControl App Button"
             android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />

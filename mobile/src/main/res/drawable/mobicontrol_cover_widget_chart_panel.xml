@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FFFFFFFF" />
+    <corners
+        android:topLeftRadius="@dimen/mobicontrol_widget_inner_radius"
+        android:topRightRadius="@dimen/mobicontrol_widget_inner_radius"
+        android:bottomLeftRadius="@dimen/mobicontrol_widget_inner_radius"
+        android:bottomRightRadius="@dimen/mobicontrol_cover_widget_inner_outer_corner_radius" />
+    <stroke android:width="1dp" android:color="#FFF2F5F9" />
+</shape>

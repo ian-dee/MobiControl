@@ -1,33 +1,34 @@
 package com.jwoglom.controlx2.sync.xdrip
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class XdripSyncConfigTest {
     @Test
-    fun requiresReloadComparedTo_payloadAndIntervalUpdatesDoNotRequireReload() {
-        val oldConfig = XdripSyncConfig(enabled = true)
-        val newConfig = oldConfig.copy(
-            sendCgmSgv = false,
-            sendPumpDeviceStatus = false,
-            sendTreatments = false,
-            sendStatusLine = false,
-            cgmSgvMinimumIntervalSeconds = 30,
-            pumpDeviceStatusMinimumIntervalSeconds = 45,
-            treatmentsMinimumIntervalSeconds = 60,
-            statusLineMinimumIntervalSeconds = 120
-        )
+    fun payloadToggleChangesOnlyRequestedGroup() {
+        val config = XdripSyncConfig(enabled = true)
+            .withPayloadEnabled(XdripPayloadGroup.TREATMENTS, false)
 
-        assertFalse(newConfig.requiresReloadComparedTo(oldConfig))
+        assertFalse(config.sendTreatments)
+        assertTrue(config.sendCgmSgv)
+        assertTrue(config.sendPumpDeviceStatus)
+        assertTrue(config.sendStatusLine)
     }
 
     @Test
-    fun requiresReloadComparedTo_enabledToggleRequiresReload() {
-        val disabled = XdripSyncConfig(enabled = false)
-        val enabled = disabled.copy(enabled = true)
+    fun enabledPayloadsReflectConfiguration() {
+        val config = XdripSyncConfig(
+            sendCgmSgv = true,
+            sendPumpDeviceStatus = false,
+            sendTreatments = true,
+            sendStatusLine = false,
+        )
 
-        assertTrue(enabled.requiresReloadComparedTo(disabled))
-        assertTrue(disabled.requiresReloadComparedTo(enabled))
+        assertEquals(
+            setOf(XdripPayloadGroup.CGM, XdripPayloadGroup.TREATMENTS),
+            config.enabledPayloads(),
+        )
     }
 }

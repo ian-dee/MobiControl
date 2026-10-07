@@ -1,5 +1,6 @@
 package com.jwoglom.controlx2.sync.xdrip
 
+import com.jwoglom.controlx2.db.historylog.HistoryLogItem
 import com.jwoglom.pumpx2.pump.messages.models.InsulinUnit
 import com.jwoglom.pumpx2.pump.messages.response.control.InitiateBolusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ControlIQIOBResponse
@@ -8,13 +9,16 @@ import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBatteryV2R
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBolusStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentEGVGuiDataResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.InsulinStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.BolusDeliveryHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.DexcomG7CGMHistoryLog
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import java.time.LocalDateTime
 
 class XdripMessageDispatcherTest {
     private data class SentValue<T>(val payload: T, val minimumIntervalSeconds: Int?)
@@ -23,210 +27,303 @@ class XdripMessageDispatcherTest {
         val sgvPayloads = mutableListOf<SentValue<String>>()
         val deviceStatusPayloads = mutableListOf<SentValue<String>>()
         val treatmentPayloads = mutableListOf<SentValue<String>>()
-        val treatmentFoodFlags = mutableListOf<Boolean>()
         val statuslinePayloads = mutableListOf<SentValue<String>>()
 
         override fun sendSgv(sgvsJsonArrayString: String, minimumIntervalSeconds: Int?): Boolean {
-            sgvPayloads.add(SentValue(sgvsJsonArrayString, minimumIntervalSeconds))
+            sgvPayloads += SentValue(sgvsJsonArrayString, minimumIntervalSeconds)
             return true
         }
 
-        override fun sendDeviceStatus(deviceStatusJsonString: String, minimumIntervalSeconds: Int?): Boolean {
-            deviceStatusPayloads.add(SentValue(deviceStatusJsonString, minimumIntervalSeconds))
+        override fun sendDeviceStatus(
+            deviceStatusJsonString: String,
+            minimumIntervalSeconds: Int?,
+        ): Boolean {
+            deviceStatusPayloads += SentValue(deviceStatusJsonString, minimumIntervalSeconds)
             return true
         }
 
         override fun sendTreatments(
             treatmentsJsonString: String,
             minimumIntervalSeconds: Int?,
-            alsoSendNewFood: Boolean
         ): Boolean {
-            treatmentPayloads.add(SentValue(treatmentsJsonString, minimumIntervalSeconds))
-            treatmentFoodFlags.add(alsoSendNewFood)
+            treatmentPayloads += SentValue(treatmentsJsonString, minimumIntervalSeconds)
             return true
         }
 
-        override fun sendExternalStatusline(statusline: String, minimumIntervalSeconds: Int?): Boolean {
-            statuslinePayloads.add(SentValue(statusline, minimumIntervalSeconds))
+        override fun sendExternalStatusline(
+            statusline: String,
+            minimumIntervalSeconds: Int?,
+        ): Boolean {
+            statuslinePayloads += SentValue(statusline, minimumIntervalSeconds)
             return true
         }
     }
 
+    private val now = Instant.parse("2026-08-24T17:00:00Z")
+    private val readingAt = now.minusSeconds(300)
+
+    private fun dispatcher(
+        broadcaster: FakeBroadcaster,
+        configProvider: () -> XdripSyncConfig = { XdripSyncConfig(enabled = true) },
+        ledger: XdripExportLedger = InMemoryXdripExportLedger(),
+    ) = XdripMessageDispatcher(
+        broadcaster = broadcaster,
+        configProvider = configProvider,
+        nowProvider = { now },
+        pumpSidProvider = { 68 },
+        uploaderBatteryProvider = { 87 },
+        pumpTimestampToInstant = { readingAt },
+        ledger = ledger,
+    )
+
     @Test
-    fun onReceiveMessage_mapsSgvWithXdripFieldNames() {
+    fun currentSgv_usesPumpTimestampAndValidDirection() {
         val broadcaster = FakeBroadcaster()
-        val now = Instant.parse("2026-01-01T00:00:00Z")
-        val dispatcher = XdripMessageDispatcher(
-            broadcaster = broadcaster,
-            configProvider = {
-                XdripSyncConfig(
-                    enabled = true,
-                    cgmSgvMinimumIntervalSeconds = 42,
-                    sendPumpDeviceStatus = false,
-                    sendTreatments = false,
-                    sendStatusLine = false
-                )
-            },
-            nowProvider = { now }
-        )
+        val dispatcher = dispatcher(broadcaster, configProvider = {
+            XdripSyncConfig(
+                enabled = true,
+                sendPumpDeviceStatus = false,
+                sendTreatments = false,
+                sendStatusLine = false,
+                cgmSgvMinimumIntervalSeconds = 42,
+            )
+        })
 
-        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1710000000, 145, 1, 2))
+        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1234, 145, 1, 6))
 
-        val sgvJson = JSONArray(broadcaster.sgvPayloads.single().payload).getJSONObject(0)
-        assertEquals(42, broadcaster.sgvPayloads.single().minimumIntervalSeconds)
-        assertEquals(145, sgvJson.getInt("mgdl"))
-        assertEquals(now.toEpochMilli(), sgvJson.getLong("mills"))
-        assertEquals("SingleUp", sgvJson.getString("direction"))
+        val sent = broadcaster.sgvPayloads.single()
+        val json = JSONArray(sent.payload).getJSONObject(0)
+        assertEquals(42, sent.minimumIntervalSeconds)
+        assertEquals(145, json.getInt("mgdl"))
+        assertEquals(readingAt.toEpochMilli(), json.getLong("mills"))
+        assertEquals("Flat", json.getString("direction"))
     }
 
     @Test
-    fun onReceiveMessage_mapsPumpStatusResponsesIntoDeviceStatusAndStatusline() {
+    fun currentSgv_filtersInvalidAndUnavailable_andNormalizesLowHigh() {
         val broadcaster = FakeBroadcaster()
-        var now = Instant.parse("2026-01-01T00:00:00Z")
-        val dispatcher = XdripMessageDispatcher(
-            broadcaster = broadcaster,
-            configProvider = {
-                XdripSyncConfig(
-                    enabled = true,
-                    sendCgmSgv = false,
-                    pumpDeviceStatusMinimumIntervalSeconds = 7,
-                    statusLineMinimumIntervalSeconds = 3,
-                    sendTreatments = false
-                )
-            },
-            nowProvider = { now }
-        )
+        val dispatcher = dispatcher(broadcaster, configProvider = {
+            XdripSyncConfig(
+                enabled = true,
+                sendPumpDeviceStatus = false,
+                sendTreatments = false,
+                sendStatusLine = false,
+            )
+        })
+
+        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1000, 0, 0, 0))
+        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1001, 0, 4, 0))
+        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1002, 55, 2, -1))
+        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1003, 350, 3, 1))
+
+        assertEquals(2, broadcaster.sgvPayloads.size)
+        assertEquals(39, JSONArray(broadcaster.sgvPayloads[0].payload).getJSONObject(0).getInt("mgdl"))
+        assertEquals(401, JSONArray(broadcaster.sgvPayloads[1].payload).getJSONObject(0).getInt("mgdl"))
+    }
+
+    @Test
+    fun pumpStatus_usesPhoneUploaderBattery_andCurrentBasalIsNotTreatment() {
+        val broadcaster = FakeBroadcaster()
+        val dispatcher = dispatcher(broadcaster, configProvider = {
+            XdripSyncConfig(enabled = true, sendCgmSgv = false, sendStatusLine = false)
+        })
 
         dispatcher.onReceiveMessage(CurrentBatteryV2Response(0, 55, 0, 0, 0, 0, 0))
-        now = Instant.parse("2026-01-01T00:01:00Z")
         dispatcher.onReceiveMessage(ControlIQIOBResponse(1234, 0, 0, 0, 0))
-        now = Instant.parse("2026-01-01T00:02:00Z")
         dispatcher.onReceiveMessage(InsulinStatusResponse(80, 0, 20))
-        now = Instant.parse("2026-01-01T00:03:00Z")
         dispatcher.onReceiveMessage(CurrentBasalStatusResponse(0, 900, 0))
 
-        val latestStatus = JSONObject(broadcaster.deviceStatusPayloads.last().payload)
-        assertEquals(7, broadcaster.deviceStatusPayloads.last().minimumIntervalSeconds)
-        assertEquals(55, latestStatus.getJSONObject("pump").getJSONObject("battery").getInt("percent"))
-        assertEquals(InsulinUnit.from1000To1(1234), latestStatus.getJSONObject("pump").getJSONObject("iob").getDouble("bolusiob"), 0.0001)
-        assertEquals(80, latestStatus.getJSONObject("pump").getInt("reservoir"))
-        assertEquals(InsulinUnit.from1000To1(900), latestStatus.getJSONObject("pump").getDouble("basal"), 0.0001)
-
-        val latestStatusline = broadcaster.statuslinePayloads.last()
-        assertEquals(3, latestStatusline.minimumIntervalSeconds)
-        // Status line uses uppercase U/h for xDrip basal rate regex compatibility
-        assertTrue(latestStatusline.payload.contains("U/h"))
-        // Battery no longer has % suffix to avoid xDrip TBR misparse
-        assertTrue(latestStatusline.payload.contains("Batt:55"))
-        assertTrue(!latestStatusline.payload.contains("Batt:55%"))
-        assertTrue(latestStatusline.payload.contains("Cart:80U"))
-    }
-
-    @Test
-    fun onReceiveMessage_mapsTreatmentResponsesWithMillsTimestamp() {
-        val broadcaster = FakeBroadcaster()
-        val now = Instant.parse("2026-01-02T03:04:05Z")
-        val dispatcher = XdripMessageDispatcher(
-            broadcaster = broadcaster,
-            configProvider = {
-                XdripSyncConfig(
-                    enabled = true,
-                    sendCgmSgv = false,
-                    sendPumpDeviceStatus = false,
-                    sendStatusLine = false,
-                    treatmentsMinimumIntervalSeconds = 11
-                )
-            },
-            nowProvider = { now }
+        val status = JSONObject(broadcaster.deviceStatusPayloads.last().payload)
+        assertEquals(87, status.getInt("uploaderBattery"))
+        assertEquals(55, status.getJSONObject("pump").getJSONObject("battery").getInt("percent"))
+        assertEquals(
+            InsulinUnit.from1000To1(1234),
+            status.getJSONObject("pump").getJSONObject("iob").getDouble("bolusiob"),
+            0.0001,
         )
-
-        dispatcher.onReceiveMessage(InitiateBolusResponse(0, 77, 0))
-        dispatcher.onReceiveMessage(CurrentBolusStatusResponse(0, 77, 1710001234, 2300, 0, 0))
-
-        assertEquals(2, broadcaster.treatmentPayloads.size)
-        assertTrue(broadcaster.treatmentFoodFlags.all { it })
-        assertTrue(broadcaster.treatmentPayloads.all { it.minimumIntervalSeconds == 11 })
-
-        val initiated = JSONArray(broadcaster.treatmentPayloads[0].payload).getJSONObject(0)
-        assertEquals("Bolus", initiated.getString("eventType"))
-        assertTrue(initiated.getString("notes").contains("bolusId=77"))
-        assertEquals(now.toEpochMilli(), initiated.getLong("mills"))
-
-        val status = JSONArray(broadcaster.treatmentPayloads[1].payload).getJSONObject(0)
-        assertEquals(InsulinUnit.from1000To1(2300), status.getDouble("insulin"), 0.0001)
-        assertTrue(status.getLong("mills") > 0)
-        assertTrue(status.getString("notes").contains("status="))
-    }
-
-    @Test
-    fun onReceiveMessage_mapsBasalStatusToTreatmentAndDeviceStatus() {
-        val broadcaster = FakeBroadcaster()
-        val now = Instant.parse("2026-01-01T00:00:00Z")
-        val dispatcher = XdripMessageDispatcher(
-            broadcaster = broadcaster,
-            configProvider = {
-                XdripSyncConfig(
-                    enabled = true,
-                    sendCgmSgv = false,
-                    sendStatusLine = false
-                )
-            },
-            nowProvider = { now }
-        )
-
-        dispatcher.onReceiveMessage(CurrentBasalStatusResponse(0, 900, 0))
-
-        // Should trigger both device status and treatment broadcasts
-        assertEquals(1, broadcaster.deviceStatusPayloads.size)
-        assertEquals(1, broadcaster.treatmentPayloads.size)
-
-        // Verify treatment payload has basal fields
-        val treatment = JSONArray(broadcaster.treatmentPayloads.single().payload).getJSONObject(0)
-        assertEquals("Temp Basal", treatment.getString("eventType"))
-        assertEquals(InsulinUnit.from1000To1(900), treatment.getDouble("rate"), 0.0001)
-        assertEquals(InsulinUnit.from1000To1(900), treatment.getDouble("absolute"), 0.0001)
-        assertEquals(XdripMessageDispatcher.BASAL_TREATMENT_DURATION_MINUTES, treatment.getInt("duration"))
-        assertEquals(now.toEpochMilli(), treatment.getLong("mills"))
-
-        // Verify device status also updated
-        val deviceStatus = JSONObject(broadcaster.deviceStatusPayloads.single().payload)
-        assertEquals(InsulinUnit.from1000To1(900), deviceStatus.getJSONObject("pump").getDouble("basal"), 0.0001)
-    }
-
-    @Test
-    fun onEvent_disabledConfigSkipsAllBroadcasts() {
-        val broadcaster = FakeBroadcaster()
-        val dispatcher = XdripMessageDispatcher(
-            broadcaster = broadcaster,
-            configProvider = { XdripSyncConfig(enabled = false) }
-        )
-
-        dispatcher.onEvent(DispatchEvent.CgmSgv(120, 0))
-        dispatcher.onEvent(DispatchEvent.PumpBattery(55))
-
-        assertTrue(broadcaster.sgvPayloads.isEmpty())
-        assertTrue(broadcaster.deviceStatusPayloads.isEmpty())
-        assertTrue(broadcaster.statuslinePayloads.isEmpty())
+        assertEquals(80, status.getJSONObject("pump").getInt("reservoir"))
+        assertEquals(0.9, status.getJSONObject("pump").getDouble("basal"), 0.0001)
         assertTrue(broadcaster.treatmentPayloads.isEmpty())
     }
 
     @Test
-    fun onEvent_readsLatestConfigProviderValuesWithoutRestart() {
+    fun initiationAndCurrentBolusStatus_neverProduceTreatment() {
         val broadcaster = FakeBroadcaster()
-        var config = XdripSyncConfig(enabled = true, sendCgmSgv = false)
-        val dispatcher = XdripMessageDispatcher(
-            broadcaster = broadcaster,
-            configProvider = { config },
-            nowProvider = { Instant.parse("2026-01-01T00:00:00Z") }
+        val dispatcher = dispatcher(broadcaster)
+
+        dispatcher.onReceiveMessage(InitiateBolusResponse(0, 77, 0))
+        dispatcher.onReceiveMessage(CurrentBolusStatusResponse(0, 77, 1234, 2300, 0, 0))
+
+        assertTrue(broadcaster.treatmentPayloads.isEmpty())
+    }
+
+    @Test
+    fun terminalBolusHistory_exportsDeliveredAmountOnce_withoutThrottle() {
+        val broadcaster = FakeBroadcaster()
+        val dispatcher = dispatcher(broadcaster)
+        val item = terminalBolusItem(deliveredMilliunits = 1_500)
+
+        dispatcher.onHistoryLogItem(item)
+        dispatcher.onHistoryLogItem(item)
+
+        val sent = broadcaster.treatmentPayloads.single()
+        val json = JSONArray(sent.payload).getJSONObject(0)
+        assertEquals(null, sent.minimumIntervalSeconds)
+        assertEquals("Bolus", json.getString("eventType"))
+        assertEquals(1.5, json.getDouble("insulin"), 0.0001)
+        assertEquals(readingAt.toEpochMilli(), json.getLong("mills"))
+        assertTrue(json.getString("notes").contains("bolusId=77"))
+        assertTrue(json.getString("notes").contains("sequence=9001"))
+    }
+
+    @Test
+    fun zeroDeliveredBolusHistory_isNotTreatment() {
+        val broadcaster = FakeBroadcaster()
+        val dispatcher = dispatcher(broadcaster)
+
+        dispatcher.onHistoryLogItem(terminalBolusItem(deliveredMilliunits = 0))
+
+        assertTrue(broadcaster.treatmentPayloads.isEmpty())
+    }
+
+    @Test
+    fun persistedLedger_suppressesReplayAfterDispatcherRecreation() {
+        var storedLedger: String? = null
+        val firstBroadcaster = FakeBroadcaster()
+        val firstLedger = PersistedXdripExportLedger(
+            readValue = { storedLedger },
+            writeValue = { storedLedger = it; true },
+        )
+        dispatcher(firstBroadcaster, ledger = firstLedger)
+            .onHistoryLogItem(terminalBolusItem(deliveredMilliunits = 1_250))
+
+        val recreatedBroadcaster = FakeBroadcaster()
+        val recreatedLedger = PersistedXdripExportLedger(
+            readValue = { storedLedger },
+            writeValue = { storedLedger = it; true },
+        )
+        dispatcher(recreatedBroadcaster, ledger = recreatedLedger)
+            .onHistoryLogItem(terminalBolusItem(deliveredMilliunits = 1_250))
+
+        assertEquals(1, firstBroadcaster.treatmentPayloads.size)
+        assertTrue(recreatedBroadcaster.treatmentPayloads.isEmpty())
+    }
+
+    @Test
+    fun reconnectHistory_backfillsRecentG7ReadingOnce() {
+        val broadcaster = FakeBroadcaster()
+        val dispatcher = dispatcher(broadcaster, configProvider = {
+            XdripSyncConfig(
+                enabled = true,
+                sendPumpDeviceStatus = false,
+                sendTreatments = false,
+                sendStatusLine = false,
+            )
+        })
+        val log = DexcomG7CGMHistoryLog(
+            1234L,
+            9002L,
+            0,
+            1,
+            1,
+            32,
+            -50,
+            155,
+            1234,
+            0,
+            5,
+        )
+        val item = HistoryLogItem(
+            seqId = log.sequenceNum,
+            pumpSid = 68,
+            typeId = log.typeId(),
+            cargo = log.cargo,
+            pumpTimeSec = log.pumpTimeSec,
+            pumpTime = LocalDateTime.of(2026, 8, 24, 9, 55),
         )
 
-        dispatcher.onEvent(DispatchEvent.CgmSgv(120, 0))
+        dispatcher.onHistoryLogItem(item)
+        dispatcher.onHistoryLogItem(item)
+
+        val json = JSONArray(broadcaster.sgvPayloads.single().payload).getJSONObject(0)
+        assertEquals(155, json.getInt("mgdl"))
+        assertEquals(readingAt.toEpochMilli(), json.getLong("mills"))
+        assertEquals("Flat", json.getString("direction"))
+    }
+
+    @Test
+    fun dispatcherReadsChangedConfigWithoutRestart() {
+        val broadcaster = FakeBroadcaster()
+        var config = XdripSyncConfig(enabled = false)
+        val dispatcher = dispatcher(broadcaster, configProvider = { config })
+
+        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1234, 120, 1, 0))
         assertTrue(broadcaster.sgvPayloads.isEmpty())
 
-        config = config.copy(sendCgmSgv = true, cgmSgvMinimumIntervalSeconds = 15)
-        dispatcher.onEvent(DispatchEvent.CgmSgv(121, 1))
-
+        config = config.copy(enabled = true)
+        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1235, 121, 1, 1))
         assertEquals(1, broadcaster.sgvPayloads.size)
-        assertEquals(15, broadcaster.sgvPayloads.single().minimumIntervalSeconds)
+    }
+
+    @Test
+    fun eventsOlderThan24Hours_areNotBackfilled() {
+        val broadcaster = FakeBroadcaster()
+        val dispatcher = XdripMessageDispatcher(
+            broadcaster = broadcaster,
+            configProvider = { XdripSyncConfig(enabled = true) },
+            nowProvider = { now },
+            pumpTimestampToInstant = { now.minusSeconds(24 * 60 * 60 + 1L) },
+        )
+
+        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1234, 120, 1, 0))
+        dispatcher.onHistoryLogItem(terminalBolusItem(deliveredMilliunits = 1_000))
+
+        assertTrue(broadcaster.sgvPayloads.isEmpty())
+        assertTrue(broadcaster.treatmentPayloads.isEmpty())
+    }
+
+    @Test
+    fun disabledConfigSkipsAllBroadcasts() {
+        val broadcaster = FakeBroadcaster()
+        val dispatcher = dispatcher(
+            broadcaster,
+            configProvider = { XdripSyncConfig(enabled = false) },
+        )
+
+        dispatcher.onReceiveMessage(CurrentEGVGuiDataResponse(1234, 120, 1, 0))
+        dispatcher.onReceiveMessage(CurrentBatteryV2Response(0, 55, 0, 0, 0, 0, 0))
+        dispatcher.onHistoryLogItem(terminalBolusItem(deliveredMilliunits = 1_000))
+
+        assertFalse(
+            broadcaster.sgvPayloads.isNotEmpty() ||
+                broadcaster.deviceStatusPayloads.isNotEmpty() ||
+                broadcaster.statuslinePayloads.isNotEmpty() ||
+                broadcaster.treatmentPayloads.isNotEmpty(),
+        )
+    }
+
+    private fun terminalBolusItem(deliveredMilliunits: Int): HistoryLogItem {
+        val log = BolusDeliveryHistoryLog(
+            1234,
+            9001,
+            77,
+            3,
+            setOf(BolusDeliveryHistoryLog.BolusType.FOOD1),
+            BolusDeliveryHistoryLog.BolusSource.BLUETOOTH_REMOTE_BOLUS,
+            0,
+            2_000,
+            0,
+            0,
+            0,
+            deliveredMilliunits,
+        )
+        return HistoryLogItem(
+            seqId = log.sequenceNum,
+            pumpSid = 68,
+            typeId = log.typeId(),
+            cargo = log.cargo,
+            pumpTimeSec = log.pumpTimeSec,
+            pumpTime = LocalDateTime.of(2026, 8, 24, 9, 55),
+        )
     }
 }

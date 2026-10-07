@@ -1,151 +1,255 @@
-# ControlX2
+# MobiControl
 
-Android app for phones and Wear OS watches which controls a Tandem t:slim X2 or Mobi pump with [PumpX2](https://github.com/jwoglom/pumpx2). 
+MobiControl is an experimental Android interface for the Tandem Mobi insulin pump. It is derived
+from [ControlX2](https://github.com/jwoglom/controlX2) and uses
+[PumpX2](https://github.com/jwoglom/pumpX2) for pump communication.
+Maintained by [ian-dee](https://github.com/ian-dee). Not an official Tandem product.
 
-> **Warning**\
-> **This application is for EXPERIMENTAL USE ONLY and can be used to MODIFY ACTIVE INSULIN DELIVERY ON YOUR INSULIN PUMP.**\
-> There is NO WARRANTY IMPLIED OR EXPRESSED DUE TO USE OF THIS SOFTWARE.\
-> YOU ASSUME ALL RISK FOR ANY MALFUNCTIONS, BUGS, OR INSULIN DELIVERY ACTIONS.\
-> \
-> It is NOT AFFILIATED WITH OR SUPPORTED by Tandem, Dexcom, or any other manufacturer.\
-> **It has not been officially approved for use and is provided as a RESEARCH TOOL ONLY.**
+**Experimental prerelease:** [source and screenshots](https://github.com/ian-dee/MobiControl/tree/codex/publication-preparation)
+ · [APK and release notes](https://github.com/ian-dee/MobiControl/releases/tag/v1.0.0-01BD-preview.1).
+For development and isolated bench testing only, not a pump providing therapy.
+Licensing clarification and two dependency-test failures remain unresolved; see below.
 
-<div>
-<img src="https://user-images.githubusercontent.com/192620/213893870-9a3954db-7482-458f-955a-16e2f13a99d1.png" alt="Bolus from phone" title="Bolus from phone" width=300 />
-<img src="https://user-images.githubusercontent.com/192620/213893894-a2e63958-3934-47cc-86f2-6eaa6d1212c9.png" alt="Bolus delivery from phone" title="Bolus delivery from phone" width=300 />
-</div>
+## Purpose
 
-<div>
-<img src="https://user-images.githubusercontent.com/192620/213893946-4aba8e56-cfa5-4166-9e7b-2cd570bd6e2a.png" alt="Bolus from watch" title="Bolus from watch" height=300 />
-<img src="https://user-images.githubusercontent.com/192620/206879740-0f0b2a03-8b9d-4c63-b806-a19b23c44675.png" alt="Bolus delivery from watch" title="Bolus delivery from watch" height=300 />
-</div>
+The project explores a customizable, glanceable pump interface designed around how people use
+their phones: checking glucose without opening a full app, viewing pump activity at a glance,
+and moving through clear, understandable workflows. Foldable phones are a particular focus,
+with separate layouts for the main display and the smaller cover screen.
 
-**Supported features:**
+MobiControl builds on the work of ControlX2 and PumpX2 rather than starting a new protocol stack.
+Its development priorities are straightforward interactions, visible pump state, and maintainable
+implementation. The pump remains the source of truth for its settings and delivery state;
+emulator previews are kept separate from real pump communication. The longer-term intent is to
+make the project understandable and approachable for collaborators, subject to upstream licensing.
 
-* Viewing pump status information (IOB, cartridge amount, battery, basal rate) 
-* Viewing connected CGM information (current reading, arrow trend, sensor and transmitter status)
-* Delivering a bolus (with units, carbs, and BG amounts) from wearable
-* Delivering a bolus (with units, carbs, and BG amounts) from phone
-* Accepting/rejecting insulin corrections 
-* Bolus calculator (to compute units based on entered carbs and BG)
-* Bolus cancellation
-* Temp Basal and Profile settings (Tandem Mobi only)
+## Features in the current development build
 
-**Work in progress features:**
+These are implemented capabilities, not a claim that every device, firmware version or failure
+case has been validated. See [known limitations](docs/KNOWN_LIMITATIONS.md) for outstanding issues.
 
-* CGM history graph
-* Watch face complications
-* App background service stability
-* Mobile UI
+### Dashboard and history
 
-**Planned features:**
+- Glucose reading and trend, insulin on board (IOB), pump battery, cartridge insulin level,
+  connection status, and Control-IQ mode.
+- Glucose, basal-delivery and bolus history on a shared timeline, with distinct manual and
+  automatic bolus markers and pump-time-change indicators.
+- Configurable graph control limits and glucose-dot colors, separate from CGM alert thresholds.
+- Chronological pump history with day grouping and incremental loading of older events.
 
-* Watch tile
-* Send pump alerts/alarms as notifications
-* Upload data to Nightscout
+### Pump and CGM workflows
 
+- Bolus preparation with food/correction calculations, manual glucose input and dose override,
+  device authentication, delivery progress, and cancellation.
+- Personal-profile viewing and editing, Control-IQ settings and sleep schedules, temporary
+  rates, and pump safety-limit settings.
+- Cartridge change, tubing fill and cannula fill workflows, with site-change information
+  and reminders.
+- Dexcom G7 session viewing, adoption of an existing pump session, sensor replacement,
+  calibration, and CGM alert settings.
+- Pump pairing/unpairing and pump-time synchronization workflows.
 
-<table border=0><tr valign=top>
-<td>
-<a href="https://www.youtube.com/watch?v=FybrFaLCs9Y">
-<b>Demo video from phone:</b>
-<br />
-<img src="https://img.youtube.com/vi/FybrFaLCs9Y/0.jpg" width=300 alt="PumpX2 Alpha for Android - December 2022" title="PumpX2 Alpha for Android - December 2022" />
-</a>
-</td>
-<td>
-<a href="https://www.youtube.com/watch?v=jUUlqxDBQdQ">
-<b>Demo video from watch:</b>
-<br />
-<img src="https://img.youtube.com/vi/jUUlqxDBQdQ/0.jpg" width=300 alt="PumpX2 Alpha for Wear OS - December 2022" title="PumpX2 Alpha for Wear OS - December 2022" />
-</a>
-</td>
-</tr></table>
+### Foldable layouts and personalization
 
-### Phone Screenshots
-<div>
-<img src="https://user-images.githubusercontent.com/192620/213893772-d1fcd8e7-7e7f-41d3-ad47-3e856dfdeb93.png" alt="App home screen" title="App home screen" height=450 />
-<img src="https://user-images.githubusercontent.com/192620/213893867-2e08401f-ca06-4cdc-8a32-9ac2a0cc1d3b.png" alt="Bolus window" title="Bolus window" height=450 />
-<img src="https://user-images.githubusercontent.com/192620/213893870-9a3954db-7482-458f-955a-16e2f13a99d1.png" alt="Bolus correction" title="Bolus correction" height=450 />
-<img src="https://user-images.githubusercontent.com/192620/213893894-a2e63958-3934-47cc-86f2-6eaa6d1212c9.png" alt="Bolus delivery" title="Bolus delivery" height=450 />
-<img src="https://user-images.githubusercontent.com/192620/213893904-13b715cf-2bfa-46fb-b527-b641a4691ffa.png" alt="Bolus notification" title="Bolus notification" height=450 />
-<img src="https://user-images.githubusercontent.com/192620/213893911-fac52b14-50f3-40ab-96ea-aacd9fedd63f.png" alt="Bolus cancellation" title="Bolus cancellation" height=450 />
-<img src="https://user-images.githubusercontent.com/192620/213893923-152b07c7-3de3-45c0-b9d5-0c0d83a8af8b.png" alt="Bolus cancelled" title="Bolus cancelled" height=450 />
-</div>
+- A compact cover-screen interface focused on glucose, IOB, recent delivery history and bolus
+  access, alongside the full-screen interface.
+- Android widgets with glucose/trend, IOB and mode information; larger layouts include history.
+- Selectable visual skins, including skin-aware widget presentation.
+- Independently configurable system-notification families for bolus activity/reminders,
+  CGM alerts, site changes, battery and cartridge warnings. System-notification preferences
+  are separate from pump commands and in-app workflow presentation.
 
-### Wear OS Screenshots
+### Integrations
 
-![App home screen](https://user-images.githubusercontent.com/192620/206879718-91b90287-dbad-4a9d-9905-a43144025a0c.png)
-![Selecting bolus units](https://user-images.githubusercontent.com/192620/206879726-5c13adad-0c05-4786-8e1a-b4bd63faae7f.png)
-![Selecting bolus carbs](https://user-images.githubusercontent.com/192620/206879731-cc83616b-d4f2-4f06-97ae-0577ebe30d94.png)
-![Delivering a bolus](https://user-images.githubusercontent.com/192620/206879740-0f0b2a03-8b9d-4c63-b806-a19b23c44675.png)
-![Delivering a bolus](https://user-images.githubusercontent.com/192620/206879749-5b6f6e32-2573-4f7d-acb4-b18448a5d880.png)
-![Delivering a bolus](https://user-images.githubusercontent.com/192620/206879759-6ec60327-8d6a-45ae-9f94-4900dbbbc6cd.png)
+- Glucose export to **GlucoseDataHandler** and xDrip-compatible receivers. GlucoseDataHandler
+  can provide downstream watch-face/complication integration without enabling watch pump control.
+- **Carb Capture**: capture a meal photo, add an optional note, and hand it off to the installed
+  ChatGPT app. The response stays in ChatGPT; this is not an embedded ChatGPT conversation or
+  an automatic input to the bolus calculator. Any carbohydrate estimate requires user review.
 
+Direct watch pump-control integration remains disabled. Retained watch code is not a supported
+watch-control feature.
 
-## Setup
+## Screenshots
 
-### Installing APK via GitHub Releases
+These are native UI captures using **synthetic demonstration data**, not patient records or
+screenshots from a paired phone. They show the three selectable skins in light mode. Tap an
+image to view it at full size; expand a skin below for its screens, bolus workflow and widgets.
 
-**This is the recommended installation option.**
+| POR | Instrument | Field Kit |
+| --- | --- | --- |
+| <a href="docs/screenshots/por/dashboard.png"><img src="docs/screenshots/por/dashboard.png" width="220" alt="Dashboard — synthetic POR preview"></a> | <a href="docs/screenshots/instrument/dashboard.png"><img src="docs/screenshots/instrument/dashboard.png" width="220" alt="Dashboard — synthetic Instrument preview"></a> | <a href="docs/screenshots/field-kit/dashboard.png"><img src="docs/screenshots/field-kit/dashboard.png" width="220" alt="Dashboard — synthetic Field Kit preview"></a> |
 
-1. On the right-hand side of the GitHub page for ControlX2, select ["Releases"](https://github.com/jwoglom/controlX2/releases)
-2. Under the most recent release, download the `mobile-release.apk` file for the phone application, and optional `wear-release.apk` file for the Wear OS application.
-3. Install the APK file on your device(s).
+<details>
+<summary>POR — screens, bolus workflow, cover screen and widgets</summary>
 
-### Installing APK via GitHub Actions
+### Main screens
 
-1. [Open this link to view the most recent GitHub Actions runs to the `main` branch.](https://github.com/jwoglom/controlX2/actions?query=branch%3Amain)
-2. Select the most recent entry from the list.
-3. Download the `mobile-release.apk` file for the phone application, and optional `wear-release.apk` file for the Wear OS application.
-<img width="400" alt="image" src="https://user-images.githubusercontent.com/192620/213935162-84dc8b92-4131-497c-8c0b-bdd6a08df8f0.png">
-4. Install the APK file on your device(s).
+Dashboard is shown above. These are the other three bottom-navigation destinations.
 
-### Building from source
-Clone the repo, open in Android Studio, and build the module for:
+| Notifications | Actions | Settings |
+| --- | --- | --- |
+| <a href="docs/screenshots/por/notifications.png"><img src="docs/screenshots/por/notifications.png" width="220" alt="Notifications — synthetic POR preview"></a> | <a href="docs/screenshots/por/actions.png"><img src="docs/screenshots/por/actions.png" width="220" alt="Actions — synthetic POR preview"></a> | <a href="docs/screenshots/por/settings.png"><img src="docs/screenshots/por/settings.png" width="220" alt="Settings — synthetic POR preview"></a> |
 
-* `mobile` - Android phone application
-* `wear` - Android Wear OS application
+### Carb Capture and cover screen
 
-Enable ADB debugging on your phone or watch and then select "Run" using the correct module:
-<img width="350" alt="Screenshot of Android Studio" src="https://user-images.githubusercontent.com/192620/213927714-8338cda1-0b36-4023-9f21-8b84cf8fc7a5.png">
+| Carb Capture | Compact cover-screen dashboard |
+| --- | --- |
+| <a href="docs/screenshots/por/carb-capture.png"><img src="docs/screenshots/por/carb-capture.png" width="220" alt="Carb Capture — synthetic POR preview"></a> | <a href="docs/screenshots/por/cover-screen.png"><img src="docs/screenshots/por/cover-screen.png" width="300" alt="Cover-screen dashboard — synthetic POR preview"></a> |
 
-### Building with local PumpX2
-Clone the PumpX2 repository and publish it to the local Maven repository. You can do this with:
+### Bolus workflow
 
-```bash
-$ git clone https://github.com/jwoglom/pumpx2
-$ cd pumpx2
-$ ./gradlew build
-$ ./gradlew publishToMavenLocal 
-```
+| 1 · Correction choice | 2 · Calculation | 3 · Review |
+| --- | --- | --- |
+| <a href="docs/screenshots/por/bolus-01-correction.png"><img src="docs/screenshots/por/bolus-01-correction.png" width="220" alt="Correction choice — synthetic POR preview"></a> | <a href="docs/screenshots/por/bolus-02-calculation.png"><img src="docs/screenshots/por/bolus-02-calculation.png" width="220" alt="Bolus calculation — synthetic POR preview"></a> | <a href="docs/screenshots/por/bolus-03-review.png"><img src="docs/screenshots/por/bolus-03-review.png" width="220" alt="Bolus review — synthetic POR preview"></a> |
 
-The PumpX2 library files will be published to `$HOME/.m2/repository/com/jwoglom/pumpx2/`.
+| 4 · Hold to deliver | 5 · Simulated progress | 6 · Stop confirmation |
+| --- | --- | --- |
+| <a href="docs/screenshots/por/bolus-04-hold.png"><img src="docs/screenshots/por/bolus-04-hold.png" width="220" alt="Hold to deliver — synthetic POR preview"></a> | <a href="docs/screenshots/por/bolus-05-progress.png"><img src="docs/screenshots/por/bolus-05-progress.png" width="220" alt="Simulated bolus progress — synthetic POR preview"></a> | <a href="docs/screenshots/por/bolus-06-stop-confirmation.png"><img src="docs/screenshots/por/bolus-06-stop-confirmation.png" width="220" alt="Stop confirmation — synthetic POR preview"></a> |
 
-Then, set the `use_local_pumpx2` Gradle property `true` in either your command-line execution with `./gradlew build -Duse_local_pumpx2=true`,
-or edit your `local.properties` file for it to be reflected in Android Studio.
+### Widgets
 
-If the PumpX2 libraries are rebuilt, either bump the version number in both PumpX2 and ControlX2's gradle
-configurations or run `./gradlew build --refresh-dependencies` in ControlX2. Otherwise, if the version
-number was not bumped, rebuilding ControlX2 may still use a cached version of the old code from that version.
+| Compact | History |
+| --- | --- |
+| <a href="docs/screenshots/por/widget-compact.png"><img src="docs/screenshots/por/widget-compact.png" width="168" alt="Compact widget — synthetic POR preview"></a> | <a href="docs/screenshots/por/widget-history.png"><img src="docs/screenshots/por/widget-history.png" width="320" alt="History widget — synthetic POR preview"></a> |
 
-## Roborazzi snapshot baselines
+| Cover compact | Cover wide |
+| --- | --- |
+| <a href="docs/screenshots/por/widget-cover-compact.png"><img src="docs/screenshots/por/widget-cover-compact.png" width="150" alt="Compact cover widget — synthetic POR preview"></a> | <a href="docs/screenshots/por/widget-cover-wide.png"><img src="docs/screenshots/por/widget-cover-wide.png" width="312" alt="Wide cover widget — synthetic POR preview"></a> |
 
-Snapshot tests for both modules use Roborazzi and write golden images to stable, versioned paths:
+</details>
 
-* `mobile/src/test/snapshots/roborazzi/ComposePreviewSnapshotTests/*.png`
-* `wear/src/test/snapshots/roborazzi/ComposePreviewSnapshotTests/*.png`
+<details>
+<summary>Instrument — screens, bolus workflow, cover screen and widgets</summary>
 
-Record snapshots with:
+### Main screens
 
-```bash
-./gradlew :mobile:recordRoborazziDebug :wear:recordRoborazziDebug
-```
+Dashboard is shown above. These are the other three bottom-navigation destinations.
 
-When UI changes are intentional, update baselines in the same PR:
+| Notifications | Actions | Settings |
+| --- | --- | --- |
+| <a href="docs/screenshots/instrument/notifications.png"><img src="docs/screenshots/instrument/notifications.png" width="220" alt="Notifications — synthetic Instrument preview"></a> | <a href="docs/screenshots/instrument/actions.png"><img src="docs/screenshots/instrument/actions.png" width="220" alt="Actions — synthetic Instrument preview"></a> | <a href="docs/screenshots/instrument/settings.png"><img src="docs/screenshots/instrument/settings.png" width="220" alt="Settings — synthetic Instrument preview"></a> |
 
-1. Re-run the record tasks.
-2. Review changed snapshot PNG files.
-3. Commit updated baselines together with the UI/code changes.
+### Carb Capture and cover screen
 
-Roborazzi diff/actual report artifacts should remain untracked; `.gitignore` is configured for that.
+| Carb Capture | Compact cover-screen dashboard |
+| --- | --- |
+| <a href="docs/screenshots/instrument/carb-capture.png"><img src="docs/screenshots/instrument/carb-capture.png" width="220" alt="Carb Capture — synthetic Instrument preview"></a> | <a href="docs/screenshots/instrument/cover-screen.png"><img src="docs/screenshots/instrument/cover-screen.png" width="300" alt="Cover-screen dashboard — synthetic Instrument preview"></a> |
+
+### Bolus workflow
+
+| 1 · Correction choice | 2 · Calculation | 3 · Review |
+| --- | --- | --- |
+| <a href="docs/screenshots/instrument/bolus-01-correction.png"><img src="docs/screenshots/instrument/bolus-01-correction.png" width="220" alt="Correction choice — synthetic Instrument preview"></a> | <a href="docs/screenshots/instrument/bolus-02-calculation.png"><img src="docs/screenshots/instrument/bolus-02-calculation.png" width="220" alt="Bolus calculation — synthetic Instrument preview"></a> | <a href="docs/screenshots/instrument/bolus-03-review.png"><img src="docs/screenshots/instrument/bolus-03-review.png" width="220" alt="Bolus review — synthetic Instrument preview"></a> |
+
+| 4 · Hold to deliver | 5 · Simulated progress | 6 · Stop confirmation |
+| --- | --- | --- |
+| <a href="docs/screenshots/instrument/bolus-04-hold.png"><img src="docs/screenshots/instrument/bolus-04-hold.png" width="220" alt="Hold to deliver — synthetic Instrument preview"></a> | <a href="docs/screenshots/instrument/bolus-05-progress.png"><img src="docs/screenshots/instrument/bolus-05-progress.png" width="220" alt="Simulated bolus progress — synthetic Instrument preview"></a> | <a href="docs/screenshots/instrument/bolus-06-stop-confirmation.png"><img src="docs/screenshots/instrument/bolus-06-stop-confirmation.png" width="220" alt="Stop confirmation — synthetic Instrument preview"></a> |
+
+### Widgets
+
+| Compact | History |
+| --- | --- |
+| <a href="docs/screenshots/instrument/widget-compact.png"><img src="docs/screenshots/instrument/widget-compact.png" width="168" alt="Compact widget — synthetic Instrument preview"></a> | <a href="docs/screenshots/instrument/widget-history.png"><img src="docs/screenshots/instrument/widget-history.png" width="320" alt="History widget — synthetic Instrument preview"></a> |
+
+| Cover compact | Cover wide |
+| --- | --- |
+| <a href="docs/screenshots/instrument/widget-cover-compact.png"><img src="docs/screenshots/instrument/widget-cover-compact.png" width="150" alt="Compact cover widget — synthetic Instrument preview"></a> | <a href="docs/screenshots/instrument/widget-cover-wide.png"><img src="docs/screenshots/instrument/widget-cover-wide.png" width="312" alt="Wide cover widget — synthetic Instrument preview"></a> |
+
+</details>
+
+<details>
+<summary>Field Kit — screens, bolus workflow, cover screen and widgets</summary>
+
+### Main screens
+
+Dashboard is shown above. These are the other three bottom-navigation destinations.
+
+| Notifications | Actions | Settings |
+| --- | --- | --- |
+| <a href="docs/screenshots/field-kit/notifications.png"><img src="docs/screenshots/field-kit/notifications.png" width="220" alt="Notifications — synthetic Field Kit preview"></a> | <a href="docs/screenshots/field-kit/actions.png"><img src="docs/screenshots/field-kit/actions.png" width="220" alt="Actions — synthetic Field Kit preview"></a> | <a href="docs/screenshots/field-kit/settings.png"><img src="docs/screenshots/field-kit/settings.png" width="220" alt="Settings — synthetic Field Kit preview"></a> |
+
+### Carb Capture and cover screen
+
+| Carb Capture | Compact cover-screen dashboard |
+| --- | --- |
+| <a href="docs/screenshots/field-kit/carb-capture.png"><img src="docs/screenshots/field-kit/carb-capture.png" width="220" alt="Carb Capture — synthetic Field Kit preview"></a> | <a href="docs/screenshots/field-kit/cover-screen.png"><img src="docs/screenshots/field-kit/cover-screen.png" width="300" alt="Cover-screen dashboard — synthetic Field Kit preview"></a> |
+
+### Bolus workflow
+
+| 1 · Correction choice | 2 · Calculation | 3 · Review |
+| --- | --- | --- |
+| <a href="docs/screenshots/field-kit/bolus-01-correction.png"><img src="docs/screenshots/field-kit/bolus-01-correction.png" width="220" alt="Correction choice — synthetic Field Kit preview"></a> | <a href="docs/screenshots/field-kit/bolus-02-calculation.png"><img src="docs/screenshots/field-kit/bolus-02-calculation.png" width="220" alt="Bolus calculation — synthetic Field Kit preview"></a> | <a href="docs/screenshots/field-kit/bolus-03-review.png"><img src="docs/screenshots/field-kit/bolus-03-review.png" width="220" alt="Bolus review — synthetic Field Kit preview"></a> |
+
+| 4 · Hold to deliver | 5 · Simulated progress | 6 · Stop confirmation |
+| --- | --- | --- |
+| <a href="docs/screenshots/field-kit/bolus-04-hold.png"><img src="docs/screenshots/field-kit/bolus-04-hold.png" width="220" alt="Hold to deliver — synthetic Field Kit preview"></a> | <a href="docs/screenshots/field-kit/bolus-05-progress.png"><img src="docs/screenshots/field-kit/bolus-05-progress.png" width="220" alt="Simulated bolus progress — synthetic Field Kit preview"></a> | <a href="docs/screenshots/field-kit/bolus-06-stop-confirmation.png"><img src="docs/screenshots/field-kit/bolus-06-stop-confirmation.png" width="220" alt="Stop confirmation — synthetic Field Kit preview"></a> |
+
+### Widgets
+
+| Compact | History |
+| --- | --- |
+| <a href="docs/screenshots/field-kit/widget-compact.png"><img src="docs/screenshots/field-kit/widget-compact.png" width="168" alt="Compact widget — synthetic Field Kit preview"></a> | <a href="docs/screenshots/field-kit/widget-history.png"><img src="docs/screenshots/field-kit/widget-history.png" width="320" alt="History widget — synthetic Field Kit preview"></a> |
+
+| Cover compact | Cover wide |
+| --- | --- |
+| <a href="docs/screenshots/field-kit/widget-cover-compact.png"><img src="docs/screenshots/field-kit/widget-cover-compact.png" width="150" alt="Compact cover widget — synthetic Field Kit preview"></a> | <a href="docs/screenshots/field-kit/widget-cover-wide.png"><img src="docs/screenshots/field-kit/widget-cover-wide.png" width="312" alt="Wide cover widget — synthetic Field Kit preview"></a> |
+
+</details>
+
+The bolus sequence uses developer preview and a simulated successful authentication callback;
+it does **not** show an Android biometric/passcode prompt or demonstrate real delivery. Carb Capture
+is shown with camera access off and no photo, so submission is unavailable. Widgets are rendered
+without launcher chrome. Android system bars are omitted from app captures.
+
+See [capture provenance and regeneration instructions](docs/screenshots/README.md). These images
+illustrate the interface, not medical advice, compatibility certification or bench validation.
+
+## Development hardware and testing
+
+Development has taken place on macOS with Android emulators and Samsung Galaxy Z Flip-series
+hardware. Local test records identify **Samsung model SM-F776U1** as a development/test device,
+including main-display, cover-screen and widget use. Emulator layouts cover both full-screen
+and compact interfaces. Pump-facing development has included isolated Tandem Mobi bench testing;
+earlier exploratory work also used a t:slim X2.
+
+This describes the project's development environment, not a supported-device list. A reviewed
+phone/Android/pump-firmware compatibility matrix has not yet been published. Cover-screen and
+widget availability also depend on the phone's software and launcher. Model information is
+included for context; personal device identifiers and raw pump records are not publication inputs.
+
+Automated unit tests, emulator UI checks and physical bench tests provide different kinds of
+evidence. Implemented does not mean bench-verified in every circumstance, and success on one
+configuration does not establish compatibility with another.
+
+## Experimental status
+
+This is development and bench-test software, not a validated replacement for the official app.
+Automated tests do not establish safety or clinical suitability. Do not use developer-preview
+values as treatment settings. Do not connect an unvalidated build to a pump providing therapy.
+
+## Publication status
+
+The repository owner authorized publication of the privacy-reviewed source and an experimental
+debug APK on October 6, 2026. This is not a stable or clinically validated release.
+ControlX2's repository-wide license is unresolved; see [the maintainer inquiry](https://github.com/jwoglom/controlX2/issues/165).
+Publishing this fork does not resolve that question or imply a license grant for ControlX2-derived
+code. PumpX2 is MIT licensed, and its exact modified source is pinned in
+[`dependencies/pumpx2.json`](dependencies/pumpx2.json). Upstream attribution and notices are retained.
+Development branches are published separately from protected `main`; publication does not bypass
+required reviews or turn failing checks into passing checks.
+
+## Development
+
+See [build instructions](docs/BUILDING.md), [architecture](docs/ARCHITECTURE.md),
+[known limitations](docs/KNOWN_LIMITATIONS.md), and [contribution requirements](CONTRIBUTING.md).
+
+Developer preview is for emulator UI testing and uses synthetic fixtures. It is not a pump
+simulator and does not prove pump behavior. No real patient profiles, device captures or private
+phone screenshots are publication inputs. Report bugs using synthetic reproduction steps,
+not raw pump logs.
+
+## Credits
+
+MobiControl builds on James Woglom's ControlX2 and PumpX2. Original upstream history and notices
+are retained. See [third-party notices](THIRD_PARTY_NOTICES.md).

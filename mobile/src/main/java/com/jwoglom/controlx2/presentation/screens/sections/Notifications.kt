@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentSize
@@ -18,14 +19,12 @@ import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
 import androidx.compose.material.pullrefresh.pullRefresh
 import androidx.compose.material.pullrefresh.rememberPullRefreshState
-import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,13 +39,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.lifecycle.Observer
 import androidx.navigation.NavHostController
 import com.jwoglom.controlx2.LocalDataStore
 import com.jwoglom.controlx2.Prefs
-import com.jwoglom.controlx2.dataStore
 import com.jwoglom.controlx2.db.historylog.HistoryLogViewModel
-import com.jwoglom.controlx2.presentation.components.HeaderLine
+import com.jwoglom.controlx2.presentation.theme.PorMenuPageHeader
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ReminderStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlarmStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.HighestAamResponse
+import com.jwoglom.controlx2.presentation.theme.PorMenuPage
+import com.jwoglom.controlx2.presentation.theme.PorMenuPageDivider
+import com.jwoglom.controlx2.presentation.theme.PorMenuNotice
+import com.jwoglom.controlx2.presentation.theme.PorNotificationSurface
 import com.jwoglom.controlx2.presentation.components.Line
 import com.jwoglom.controlx2.presentation.components.LoadSpinner
 import com.jwoglom.controlx2.presentation.screens.sections.components.NotificationItem
@@ -54,6 +58,7 @@ import com.jwoglom.controlx2.presentation.screens.setUpPreviewState
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
 import com.jwoglom.controlx2.presentation.util.LifecycleStateObserver
 import com.jwoglom.controlx2.shared.presentation.intervalOf
+import com.jwoglom.controlx2.shared.pumpNotificationStatusRequests
 import com.jwoglom.controlx2.shared.util.SendType
 import com.jwoglom.controlx2.shared.util.determinePumpModel
 import com.jwoglom.pumpx2.pump.messages.Message
@@ -61,9 +66,7 @@ import com.jwoglom.pumpx2.pump.PumpState
 import com.jwoglom.pumpx2.pump.messages.models.ApiVersion
 import com.jwoglom.pumpx2.pump.messages.models.KnownApiVersion
 import com.jwoglom.pumpx2.pump.messages.models.KnownDeviceModel
-import com.jwoglom.pumpx2.pump.messages.models.NotificationBundle
 import com.jwoglom.pumpx2.pump.messages.request.currentStatus.HomeScreenMirrorRequest
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import timber.log.Timber
@@ -76,133 +79,176 @@ fun Notifications(
     sendPumpCommands: (SendType, List<Message>) -> Unit,
     historyLogViewModel: HistoryLogViewModel? = null
 ) {
-    val coroutineScope = rememberCoroutineScope()
-
     val context = LocalContext.current
     val ds = LocalDataStore.current
     val deviceName = ds.setupDeviceName.observeAsState()
+    val notificationBundle by ds.notificationBundle.observeAsState()
+    val notificationStatusEvent by ds.notificationStatusEvent.observeAsState()
 
     val refreshScope = rememberCoroutineScope()
     var refreshing by remember { mutableStateOf(true) }
+    var refreshAttempt by remember { mutableStateOf<NotificationRefreshAttempt?>(null) }
+    var refreshAttemptId by remember { mutableStateOf(0L) }
+    var refreshError by remember { mutableStateOf<String?>(null) }
 
     fun fetchDataStoreFields(type: SendType) {
         sendPumpCommands(type, notificationsCommands)
     }
 
-    fun waitForLoaded() = refreshScope.launch {
-        if (!Prefs(context).serviceEnabled()) return@launch
-        var sinceLastFetchTime = 0
-        while (true) {
-            val nullFields = notificationsFields.filter { field -> field.value == null }.toSet()
-            if (nullFields.isEmpty()) {
-                break
-            }
-
-            Timber.i("Notifications loading: remaining ${nullFields.size}: ${notificationsFields.map { it.value }}")
-            if (sinceLastFetchTime >= 2500) {
-                Timber.i("Notifications loading re-fetching with cache")
-                fetchDataStoreFields(SendType.CACHED)
-                sinceLastFetchTime = 0
-            }
-
-            delay(250)
-            sinceLastFetchTime += 250
-        }
-        Timber.i("Notifications loading done: ${notificationsFields.map { it.value }}")
-        refreshing = false
-    }
-
     fun refresh() = refreshScope.launch {
-        if (!Prefs(context).serviceEnabled()) return@launch
+        if (!Prefs(context).serviceEnabled()) {
+            refreshing = false
+            refreshError = "Pump communication is disabled."
+            return@launch
+        }
         Timber.i("reloading Notifications with force")
         refreshing = true
+        refreshError = null
+        refreshAttemptId += 1L
+        refreshAttempt = NotificationRefreshAttempt(
+            id = refreshAttemptId,
+            acceptEventsAfterSequence = ds.latestPumpMessageSequence.value ?: 0L,
+        )
 
-        notificationsFields.forEach { field -> field.value = null }
+        ds.notificationBundle.value = null
         fetchDataStoreFields(SendType.BUST_CACHE)
     }
+
+    val notificationDismissal = rememberNotificationDismissalUiState(
+        sendPumpCommands = sendPumpCommands,
+        refreshNotifications = ::refresh,
+    )
 
     val state = rememberPullRefreshState(refreshing, ::refresh)
 
     LifecycleStateObserver(lifecycleOwner = LocalLifecycleOwner.current, onStop = {
-        refreshScope.cancel()
+        refreshAttempt = null
+        refreshing = false
     }) {
         Timber.i("reloading Notifications from onStart lifecyclestate")
-        fetchDataStoreFields(SendType.STANDARD)
+        refresh()
     }
 
     LaunchedEffect(intervalOf(60)) {
-        Timber.i("reloading Notifications from interval")
-        fetchDataStoreFields(SendType.STANDARD)
+        if (refreshAttempt == null) {
+            Timber.i("reloading Notifications from interval")
+            refresh()
+        }
     }
 
-    LaunchedEffect(refreshing) {
-        waitForLoaded()
+    LaunchedEffect(notificationStatusEvent?.sequence, refreshAttempt) {
+        val attempt = refreshAttempt ?: return@LaunchedEffect
+        val event = notificationStatusEvent
+        if (isFreshReminderStatus(attempt, event?.sequence, event?.message)) {
+            Timber.i("Notifications loading completed by fresh ReminderStatusResponse")
+            refreshAttempt = null
+            refreshing = false
+            refreshError = null
+        }
     }
 
-    Box(
+    LaunchedEffect(refreshAttempt) {
+        val attempt = refreshAttempt ?: return@LaunchedEffect
+        delay(NOTIFICATION_REFRESH_TIMEOUT_MILLIS)
+        if (refreshAttempt != attempt) return@LaunchedEffect
+        Timber.w("Notifications loading timed out without fresh reminder status")
+        refreshAttempt = null
+        refreshing = false
+        refreshError = "Pump reminder status was not received. Pull to retry."
+    }
+
+    PorMenuPage(
         modifier = Modifier
             .fillMaxSize()
-            .pullRefresh(state)
+            .padding(innerPadding)
     ) {
-        PullRefreshIndicator(
-            refreshing, state,
-            Modifier
-                .align(Alignment.TopCenter)
-                .zIndex(10f)
-        )
+        PorMenuPageHeader("Notifications")
+        PorMenuPageDivider()
 
-        val notifications = remember { mutableStateListOf<Any>()}
-        ds.notificationBundle.observe(LocalLifecycleOwner.current, Observer {
-            ds.notificationBundle.value?.let {
-                notifications.clear()
-                notifications.addAll(it.get().toTypedArray())
-            }
-        })
+        val notifications = notificationBundle?.get()?.toList().orEmpty()
 
-        LazyColumn(
-            contentPadding = innerPadding,
-            verticalArrangement = Arrangement.spacedBy(0.dp),
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 0.dp),
-            content = {
-                item {
-                    HeaderLine("Notifications")
-                    Divider()
-
-                    val model = determinePumpModel(deviceName.value ?: "")
-                    if (model == KnownDeviceModel.TSLIM_X2) {
-                        Line("Notifications cannot be dismissed on this device model (${model}).")
-                        Line("")
-                    }
-                }
-
-                Timber.i("Notifications fetched: ${notifications}")
-                if (refreshing) {
-                    item {
-                        LoadSpinner("Loading notifications...")
-                    }
-                } else if (notifications.isEmpty()) {
-                    item {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxSize()) {
-                            Spacer(Modifier.height(64.dp))
-                            Line("No notifications", style = TextStyle(textAlign = TextAlign.Center))
-                        }
-                    }
-                }
-                notifications.forEach {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .wrapContentSize(Alignment.TopStart)
-                        ) {
-                            NotificationItem(it, sendPumpCommands=sendPumpCommands, ::refresh)
-                        }
-                    }
-                }
+                .fillMaxWidth()
+                .weight(1f)
+                .pullRefresh(state)
+        ) {
+            if (showNotificationPullRefreshIndicator(refreshing)) {
+                PullRefreshIndicator(
+                    refreshing = false,
+                    state = state,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .zIndex(10f),
+                )
             }
-        )
+
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 0.dp),
+                content = {
+                    item {
+                        val model = determinePumpModel(deviceName.value ?: "")
+                        if (model == KnownDeviceModel.TSLIM_X2) {
+                            Line("Notifications cannot be dismissed on this device model (${model}).")
+                            Line("")
+                        }
+                    }
+
+                    Timber.i("Notifications fetched: ${notifications}")
+                    if (refreshing) {
+                        item {
+                            PorMenuNotice { LoadSpinner("Loading notifications...") }
+                        }
+                    } else if (refreshError != null) {
+                        item {
+                            PorMenuNotice {
+                                Line(refreshError!!)
+                                Line("")
+                            }
+                        }
+                    } else if (notifications.isEmpty()) {
+                        item {
+                            PorMenuNotice {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxSize()) {
+                                    Spacer(Modifier.height(64.dp))
+                                    Line("No notifications", style = TextStyle(textAlign = TextAlign.Center))
+                                }
+                            }
+                        }
+                    }
+                    notifications.forEach { notification ->
+                        item(key = notificationDismissalTarget(notification)?.toString() ?: notification.toString()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .wrapContentSize(Alignment.TopStart)
+                            ) {
+                                PorNotificationSurface(
+                                    kind = when (notification) {
+                                        is ReminderStatusResponse.ReminderType -> "Reminder"
+                                        is AlarmStatusResponse.AlarmResponseType -> "Pump alarm"
+                                        is HighestAamResponse -> "Pump malfunction"
+                                        else -> "Pump notification"
+                                    },
+                                    urgent = notification is AlarmStatusResponse.AlarmResponseType || notification is HighestAamResponse,
+                                ) {
+                                    NotificationItem(
+                                        notification = notification,
+                                        dismissalPending =
+                                            notificationDismissal.pendingTarget ==
+                                                notificationDismissalTarget(notification),
+                                        onDismiss = notificationDismissal.onDismiss,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -216,13 +262,7 @@ fun notificationsApiVersion(): ApiVersion {
 
 val notificationsCommands = listOf(
     HomeScreenMirrorRequest(),
-    *NotificationBundle.allRequests().toTypedArray()
-).filter { msg ->
-    !msg.props().minApi.get().greaterThan(notificationsApiVersion())
-}
-
-val notificationsFields = listOf(
-    dataStore.notificationBundle
+    *pumpNotificationStatusRequests(notificationsApiVersion()).toTypedArray(),
 )
 
 @Preview(showBackground = true)

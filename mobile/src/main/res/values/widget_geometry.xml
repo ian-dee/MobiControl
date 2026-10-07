@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Inner corners share the outer corner center: 22dp - 8dp = 14dp. -->
+    <dimen name="mobicontrol_widget_outer_radius">22dp</dimen>
+    <dimen name="mobicontrol_widget_content_inset">8dp</dimen>
+    <dimen name="mobicontrol_widget_inner_radius">14dp</dimen>
+    <!-- Cover host has a separate rounded mask. Enamel remains concentric: 24dp - 3dp. -->
+    <dimen name="mobicontrol_cover_widget_outer_radius">24dp</dimen>
+    <dimen name="mobicontrol_cover_widget_enamel_radius">21dp</dimen>
+    <!-- Content starts 8dp inside the frame, so outer-adjacent tile corners share its center. -->
+    <dimen name="mobicontrol_cover_widget_inner_outer_corner_radius">16dp</dimen>
+    <!-- Field Kit's inner tile layer is inset another 2dp from the tile frame. -->
+    <dimen name="mobicontrol_cover_widget_field_kit_inner_outer_corner_radius">14dp</dimen>
+</resources>

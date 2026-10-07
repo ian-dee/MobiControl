@@ -57,5 +57,6 @@ object StateKeys {
     const val PUMP_IOB = "pumpIOB"
     const val PUMP_CARTRIDGE_UNITS = "pumpCartridgeUnits"
     const val PUMP_CURRENT_BASAL = "pumpCurrentBasal"
+    const val PUMP_CONTROL_IQ_MODE = "pumpControlIqMode"
     const val CGM_READING = "cgmReading"
 }

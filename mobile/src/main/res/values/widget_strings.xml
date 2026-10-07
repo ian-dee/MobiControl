@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mobicontrol_widget_name">MobiControl</string>
+    <string name="mobicontrol_widget_description">Current glucose and insulin on board, with an optional four-hour history chart</string>
+    <string name="mobicontrol_widget_compact_name">MobiControl Compact</string>
+    <string name="mobicontrol_widget_compact_description">Glucose and IOB in a compact 2 × 1 widget</string>
+    <string name="mobicontrol_widget_wide_name">MobiControl Wide</string>
+    <string name="mobicontrol_widget_wide_description">Glucose and IOB in a wide 3 × 1 widget</string>
+    <string name="mobicontrol_widget_history_name">MobiControl History</string>
+    <string name="mobicontrol_widget_history_description">Glucose, IOB, and four-hour history in a 3 × 2 widget</string>
+    <string name="mobicontrol_cover_widget_compact_name">MobiControl Cover Compact</string>
+    <string name="mobicontrol_cover_widget_compact_description">Glucose and IOB in a 2 × 2 FlexWindow widget</string>
+    <string name="mobicontrol_cover_widget_wide_name">MobiControl Cover History</string>
+    <string name="mobicontrol_cover_widget_wide_description">Glucose, IOB, and four-hour history in a 4 × 2 FlexWindow widget</string>
+    <string name="mobicontrol_car_widget_name">MobiControl Car Glance</string>
+    <string name="mobicontrol_car_widget_description">Read-only glucose, trend, IOB, freshness, and responsive four-hour history for glanceable surfaces</string>
+    <string name="mobicontrol_widget_glucose_label">GLUCOSE · %1$s</string>
+    <string name="mobicontrol_widget_glucose_label_preview">GLUCOSE · mg/dL</string>
+    <string name="mobicontrol_widget_iob_label">IOB · U</string>
+    <string name="mobicontrol_cover_widget_iob_suffix">U · IOB</string>
+    <string name="mobicontrol_widget_no_data">No pump data</string>
+    <string name="mobicontrol_widget_status_live">LIVE</string>
+    <string name="mobicontrol_widget_status_stale">STALE</string>
+    <string name="mobicontrol_widget_status_partial">PARTIAL</string>
+    <string name="mobicontrol_widget_status_no_data">NO DATA</string>
+    <string name="mobicontrol_widget_mode_description">Control-IQ mode</string>
+    <string name="mobicontrol_widget_mode_standard">Standard</string>
+    <string name="mobicontrol_widget_mode_exercise">Exercise</string>
+    <string name="mobicontrol_widget_mode_sleep">Sleep</string>
+    <string name="mobicontrol_widget_history_title">4-HOUR HISTORY</string>
+    <string name="mobicontrol_widget_history_range">CGM + BOLUS</string>
+    <string name="mobicontrol_widget_chart_description">Four-hour glucose and bolus history</string>
+    <string name="mobicontrol_widget_manual_legend">● MANUAL</string>
+    <string name="mobicontrol_widget_auto_legend">● AUTO</string>
+</resources>

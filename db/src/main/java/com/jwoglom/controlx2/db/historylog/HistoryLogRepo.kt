@@ -8,6 +8,8 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 
 class HistoryLogRepo(private val historyLogDao: HistoryLogDao) {
+    fun getMostRecentlyActivePumpSid(): Int? = historyLogDao.getMostRecentlyActivePumpSid()
+
     fun getCount(pumpSid: Int): Flow<Long?> = historyLogDao.getCount(pumpSid)
     fun getCount(pumpSid: Int, min: Long, max: Long): Flow<Long?> = historyLogDao.getCount(pumpSid, min, max)
     fun getCountAboveSeqId(pumpSid: Int, minSeqId: Long): Flow<Long?> = historyLogDao.getCountAboveSeqId(pumpSid, minSeqId)
@@ -52,6 +54,20 @@ class HistoryLogRepo(private val historyLogDao: HistoryLogDao) {
 
     fun getItemsForTypesSince(pumpSid: Int, typeIds: List<Int>, minPumpTimeSec: Long): Flow<List<HistoryLogItem>> {
         return historyLogDao.getItemsForTypesSince(pumpSid, typeIds, minPumpTimeSec)
+    }
+
+    fun getItemsForTypesInTimeRange(
+        pumpSid: Int,
+        typeIds: List<Int>,
+        minPumpTimeSec: Long,
+        maxPumpTimeSec: Long,
+    ): Flow<List<HistoryLogItem>> {
+        return historyLogDao.getItemsForTypesInTimeRange(
+            pumpSid,
+            typeIds,
+            minPumpTimeSec,
+            maxPumpTimeSec,
+        )
     }
 
     @Suppress("RedundantSuspendModifier")

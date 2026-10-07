@@ -24,20 +24,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.jwoglom.controlx2.Prefs
-import com.jwoglom.controlx2.shared.MessagePaths
 import com.jwoglom.controlx2.presentation.components.HeaderLine
 import com.jwoglom.controlx2.sync.xdrip.XdripBroadcastSender
 import com.jwoglom.controlx2.sync.xdrip.XdripPayloadGroup
+import com.jwoglom.controlx2.sync.xdrip.XdripReceiverInspector
 import com.jwoglom.controlx2.sync.xdrip.XdripSyncConfig
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
@@ -46,27 +43,15 @@ import java.time.Instant
 fun XdripSettings(
     innerPadding: PaddingValues = PaddingValues(),
     navController: NavHostController? = null,
-    sendMessage: (String, ByteArray) -> Unit,
 ) {
     val context = LocalContext.current
     val prefs = Prefs(context).prefs()
-    val coroutineScope = rememberCoroutineScope()
 
     var config by remember { mutableStateOf(XdripSyncConfig.load(prefs)) }
 
     fun saveConfig(newConfig: XdripSyncConfig, showToastText: String? = null) {
-        val oldConfig = config
         config = newConfig
         XdripSyncConfig.save(prefs, newConfig)
-
-        if (newConfig.requiresReloadComparedTo(oldConfig)) {
-            coroutineScope.launch {
-                delay(250)
-                sendMessage(MessagePaths.TO_SERVER_FORCE_RELOAD, "".toByteArray())
-                delay(250)
-                sendMessage(MessagePaths.TO_SERVER_APP_RELOAD, "".toByteArray())
-            }
-        }
 
         if (showToastText != null) {
             Toast.makeText(context, showToastText, Toast.LENGTH_SHORT).show()
@@ -210,6 +195,15 @@ private fun XdripPayloadToggleItem(
 }
 
 private fun sendDiagnosticsPayload(context: Context) {
+    val receiverStatus = XdripReceiverInspector(context).inspect()
+    if (!receiverStatus.installed) {
+        Toast.makeText(
+            context,
+            "xDrip+ is not installed. No diagnostic broadcast was sent.",
+            Toast.LENGTH_LONG,
+        ).show()
+        return
+    }
     val now = Instant.now()
     val sender = XdripBroadcastSender(context)
     val sgvSent = sender.sendSgv(
@@ -221,12 +215,17 @@ private fun sendDiagnosticsPayload(context: Context) {
             }
         ).toString()
     )
-    val statusSent = sender.sendExternalStatusline("ControlX2 test statusline @ ${now}")
+    val statusSent = sender.sendExternalStatusline("MobiControl test statusline @ ${now}")
 
-    val message = buildString {
-        append("Diagnostics sent")
-        append(if (sgvSent) " (SGV OK" else " (SGV skipped")
-        append(if (statusSent) ", statusline OK)" else ", statusline skipped)")
+    val message = when {
+        sgvSent && statusSent ->
+            "xDrip+ receivers found; SGV and statusline diagnostics emitted. xDrip+ does not acknowledge acceptance."
+        sgvSent ->
+            "SGV diagnostic emitted, but the xDrip+ statusline receiver is unavailable."
+        statusSent ->
+            "Statusline diagnostic emitted, but the xDrip+ SGV receiver is unavailable."
+        else ->
+            "xDrip+ is installed, but neither diagnostic broadcast receiver is available."
     }
-    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 }

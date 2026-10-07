@@ -20,16 +20,23 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!--
-        Package visibility for targeted broadcasts to xDrip+ (see
-        :db's XdripBroadcastSender). Android 11+ requires the sender
+        Package visibility for targeted broadcasts to xDrip+ and GlucoDataHandler (see
+        :db's external sync senders). Android 11+ requires the sender
         to declare a <queries> entry before `intent.package = "..."`
         will deliver; without this the broadcast is silently dropped.
     -->
     <queries>
         <package android:name="com.eveningoutpost.dexdrip" />
+        <package android:name="de.michelinside.glucodatahandler" />
+        <package android:name="de.michelinside.glucodatahandler.second" />
+        <package android:name="com.samsung.android.lool" />
+        <package android:name="com.openai.chatgpt" />
     </queries>
 
     <application
@@ -37,8 +44,9 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:debuggable="true"
         android:fullBackupContent="@xml/backup_rules"
-        android:icon="@drawable/pump"
+        android:icon="@mipmap/mobicontrol_launcher"
         android:label="@string/app_name"
+        android:roundIcon="@mipmap/mobicontrol_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.WearX2"
         tools:ignore="HardcodedDebugMode"
@@ -48,6 +56,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.WearX2">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -60,14 +69,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
-                    android:scheme="com_jwoglom_controlx2"
-                    android:host="controlx2"
+                    android:scheme="local.controlx21"
+                    android:host="controlx21"
                     android:pathPrefix="/" />
             </intent-filter>
 
             <intent-filter>
-                <action android:name="com.jwoglom.controlx2.action.OPEN_BOLUS" />
-                <action android:name="com.jwoglom.controlx2.action.OPEN_TEMP_RATE" />
+                <action android:name="${applicationId}.action.OPEN_BOLUS" />
+                <action android:name="${applicationId}.action.OPEN_TEMP_RATE" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
@@ -80,7 +89,8 @@
             android:name=".CommService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice"
-            android:icon="@drawable/pump">
+            android:icon="@drawable/pump"
+            android:stopWithTask="false">
             <intent-filter>
                 <!--action
                     android:name="com.google.android.gms.wearable.BIND_LISTENER"
@@ -109,9 +119,106 @@
             </intent-filter-->
         </receiver>
 
+        <receiver
+            android:name=".widget.MobiControlWidgetProvider"
+            android:exported="false"
+            android:label="@string/mobicontrol_widget_compact_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/mobicontrol_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.MobiControlWideWidgetProvider"
+            android:exported="false"
+            android:label="@string/mobicontrol_widget_wide_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/mobicontrol_widget_wide_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.MobiControlHistoryWidgetProvider"
+            android:exported="false"
+            android:label="@string/mobicontrol_widget_history_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/mobicontrol_widget_history_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.MobiControlCoverCompactWidgetProvider"
+            android:exported="false"
+            android:label="@string/mobicontrol_cover_widget_compact_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/mobicontrol_cover_widget_compact_info" />
+            <meta-data
+                android:name="com.samsung.android.appwidget.provider"
+                android:resource="@xml/mobicontrol_samsung_sub_screen_widget" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.MobiControlCoverWideWidgetProvider"
+            android:exported="false"
+            android:label="@string/mobicontrol_cover_widget_wide_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/mobicontrol_cover_widget_wide_info" />
+            <meta-data
+                android:name="com.samsung.android.appwidget.provider"
+                android:resource="@xml/mobicontrol_samsung_sub_screen_widget" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.MobiControlCarGlanceWidgetReceiver"
+            android:exported="false"
+            android:label="@string/mobicontrol_car_widget_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/mobicontrol_car_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".AutomaticBolusActionReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".BolusTimeoutReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="com.jwoglom.controlx2"
+            android:authorities="${applicationId}"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data

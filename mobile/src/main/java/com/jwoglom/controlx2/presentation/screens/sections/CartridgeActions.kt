@@ -33,22 +33,24 @@ import com.jwoglom.controlx2.Prefs
 import com.jwoglom.controlx2.dataStore
 import com.jwoglom.controlx2.db.historylog.HistoryLogViewModel
 import com.jwoglom.controlx2.presentation.screens.setUpPreviewState
+import com.jwoglom.controlx2.presentation.authentication.BolusAuthenticationResult
+import com.jwoglom.controlx2.presentation.authentication.SettingsAuthenticationRequest
+import com.jwoglom.controlx2.presentation.simulation.DeveloperCartridgeDemoPath
+import com.jwoglom.controlx2.presentation.simulation.DeveloperCartridgeSimulation
 import com.jwoglom.controlx2.presentation.screens.sections.components.cartridge.CartridgeActionsMenuScreen
 import com.jwoglom.controlx2.presentation.screens.sections.components.cartridge.ChangeCartridgeWorkflowScreen
 import com.jwoglom.controlx2.presentation.screens.sections.components.cartridge.FillCannulaWorkflowScreen
 import com.jwoglom.controlx2.presentation.screens.sections.components.cartridge.FillTubingWorkflowScreen
-import com.jwoglom.pumpx2.pump.messages.models.InsulinUnit
-import com.jwoglom.pumpx2.pump.messages.models.NotificationBundle
+import com.jwoglom.controlx2.presentation.screens.sections.components.PumpChartTimeline
 import com.jwoglom.pumpx2.pump.messages.request.control.EnterChangeCartridgeModeRequest
 import com.jwoglom.pumpx2.pump.messages.request.control.EnterFillTubingModeRequest
 import com.jwoglom.pumpx2.pump.messages.request.control.ExitChangeCartridgeModeRequest
 import com.jwoglom.pumpx2.pump.messages.request.control.ExitFillTubingModeRequest
 import com.jwoglom.pumpx2.pump.messages.request.control.FillCannulaRequest
-import com.jwoglom.pumpx2.pump.messages.request.control.ResumePumpingRequest
-import com.jwoglom.pumpx2.pump.messages.request.control.SuspendPumpingRequest
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
 import com.jwoglom.controlx2.presentation.util.LifecycleStateObserver
 import com.jwoglom.controlx2.shared.enums.BasalStatus
+import com.jwoglom.controlx2.shared.pumpNotificationStatusRequests
 import com.jwoglom.controlx2.shared.presentation.intervalOf
 import com.jwoglom.controlx2.shared.util.SendType
 import com.jwoglom.pumpx2.pump.messages.Message
@@ -57,12 +59,18 @@ import com.jwoglom.pumpx2.pump.messages.models.ApiVersion
 import com.jwoglom.pumpx2.pump.messages.models.KnownApiVersion
 import com.jwoglom.pumpx2.pump.messages.request.currentStatus.CGMStatusRequest
 import com.jwoglom.pumpx2.pump.messages.request.currentStatus.HomeScreenMirrorRequest
+import com.jwoglom.pumpx2.pump.messages.request.currentStatus.HistoryLogStatusRequest
 import com.jwoglom.pumpx2.pump.messages.request.currentStatus.TimeSinceResetRequest
 import com.jwoglom.pumpx2.pump.messages.request.currentStatus.LoadStatusRequest
+import com.jwoglom.pumpx2.pump.messages.request.currentStatus.RemindersRequest
 import com.jwoglom.pumpx2.pump.messages.response.controlStream.DetectingCartridgeStateStreamResponse
 import com.jwoglom.pumpx2.pump.messages.response.controlStream.EnterChangeCartridgeModeStateStreamResponse
 import com.jwoglom.pumpx2.pump.messages.response.controlStream.ExitFillTubingModeStateStreamResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.LoadStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.CannulaFilledHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.DateChangeHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.TimeChangedHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.TubingFilledHistoryLog
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -85,17 +93,77 @@ fun CartridgeActions(
     _changeCartridgeMenuState: Boolean = false,
     _fillTubingMenuState: Boolean = false,
     _fillCannulaMenuState: Boolean = false,
-    navigateBack: () -> Unit
+    requestSettingsAuthentication: SettingsAuthenticationRequest = { _, onResult ->
+        onResult(BolusAuthenticationResult.Unavailable("Preview authentication unavailable."))
+    },
+    navigateBack: () -> Unit,
+    deliveryTransition: DeliveryTransitionOperation? = null,
+    pumpConnected: Boolean = true,
+    onSuspendDelivery: () -> Unit = {},
+    onResumeDelivery: () -> Unit = {},
+    onCheckDeliveryStatus: () -> Unit = {},
+    resumeRequestedPhase: IncompleteCartridgePhase? = null,
+    onResumeRequestConsumed: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val ds = LocalDataStore.current
+    val prefs = remember(context) { Prefs(context) }
+    val developerPreviewEnabled = prefs.developerPreviewEnabled()
+    val developerSimulation = remember {
+        DeveloperCartridgeSimulation(
+            initialBasalStatus = if (prefs.developerPreviewDeliverySuspended()) {
+                BasalStatus.PUMP_SUSPENDED
+            } else {
+                BasalStatus.ON
+            },
+        )
+    }
     val deviceName = ds.setupDeviceName.observeAsState()
+    val pumpSid = ds.pumpSid.observeAsState(prefs.currentPumpSid())
+    val latestPumpMessageSequence = ds.latestPumpMessageSequence.observeAsState(0L)
+    val basalStatusEvent = ds.basalStatusEvent.observeAsState()
+    val loadStatusEvent = ds.loadStatusEvent.observeAsState()
+    val remindersEvent = ds.remindersEvent.observeAsState()
+    val pumpClock = ds.timeSinceResetResponse.observeAsState()
+    val fillCannulaResponseEvent = ds.fillCannulaResponseEvent.observeAsState()
+    val enterFillTubingModeResponseEvent = ds.enterFillTubingModeResponseEvent.observeAsState()
+    val exitFillTubingModeResponseEvent = ds.exitFillTubingModeResponseEvent.observeAsState()
+    val fillCannulaStateEvent = ds.fillCannulaStateEvent.observeAsState()
+    val siteChangeReminderResponseEvent = ds.siteChangeReminderResponseEvent.observeAsState()
+    val cannulaHistorySource = remember(historyLogViewModel) {
+        historyLogViewModel?.allItemsForType(CannulaFilledHistoryLog::class.java)
+    }
+    val latestTubingHistorySource = remember(historyLogViewModel) {
+        historyLogViewModel?.latestItemsForType(TubingFilledHistoryLog::class.java, 1)
+    }
+    val timeChangeHistorySource = remember(historyLogViewModel) {
+        historyLogViewModel?.allItemsForType(TimeChangedHistoryLog::class.java)
+    }
+    val dateChangeHistorySource = remember(historyLogViewModel) {
+        historyLogViewModel?.allItemsForType(DateChangeHistoryLog::class.java)
+    }
+    val cannulaHistoryItems = cannulaHistorySource?.observeAsState()?.value
+    val latestCompletedCannulaHistoryItem = remember(cannulaHistoryItems) {
+        latestCompletedCannulaFill(cannulaHistoryItems.orEmpty())
+    }
+    val latestTubingHistoryItem = latestTubingHistorySource?.observeAsState()?.value?.firstOrNull()
+    val timeChangeHistoryItems = timeChangeHistorySource?.observeAsState()?.value.orEmpty()
+    val dateChangeHistoryItems = dateChangeHistorySource?.observeAsState()?.value.orEmpty()
+    val pumpTimeline = remember(timeChangeHistoryItems, dateChangeHistoryItems) {
+        PumpChartTimeline.from(timeChangeHistoryItems + dateChangeHistoryItems)
+    }
 
     val refreshScope = rememberCoroutineScope()
-    var refreshing by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(!developerPreviewEnabled) }
     var notificationsRefreshing by remember { mutableStateOf(false) }
     var tubingExitRequested by remember { mutableStateOf(false) }
-    var cannulaPrimeAmount by remember { mutableStateOf(0.3) }
+    var cannulaPrimeAmount by remember { mutableStateOf(prefs.cannulaPrimeAmount()) }
+    var cannulaReminderDays by remember { mutableStateOf(prefs.cannulaReminderDays()) }
+    var cannulaReminderTimeMinutes by remember { mutableStateOf(prefs.cannulaReminderTimeMinutes()) }
+    var cannulaAttemptId by remember { mutableStateOf(0L) }
+    var cannulaWorkflowState by remember {
+        mutableStateOf(CannulaFillAttemptState.begin(0L, latestPumpMessageSequence.value))
+    }
 
     var subScreen by remember {
         mutableStateOf(
@@ -108,6 +176,105 @@ fun CartridgeActions(
         )
     }
 
+    fun currentPumpMessageSequence() = if (developerPreviewEnabled) {
+        developerSimulation.messageSequence
+    } else {
+        ds.latestPumpMessageSequence.value ?: 0L
+    }
+
+    fun updateCannulaWorkflowState(next: CannulaFillAttemptState, event: String) {
+        if (next == cannulaWorkflowState) return
+        Timber.i(
+            "CannulaFill attempt=%d event=%s phase=%s->%s sequence=%d error=%s",
+            next.attemptId,
+            event,
+            cannulaWorkflowState.phase,
+            next.phase,
+            next.acceptEventsAfterSequence,
+            next.error,
+        )
+        cannulaWorkflowState = next
+    }
+
+    fun beginCannulaAttempt(reason: String) {
+        cannulaAttemptId += 1L
+        cannulaPrimeAmount = prefs.cannulaPrimeAmount()
+        cannulaReminderDays = prefs.cannulaReminderDays()
+        cannulaReminderTimeMinutes = prefs.cannulaReminderTimeMinutes()
+        val next = CannulaFillAttemptState.begin(cannulaAttemptId, currentPumpMessageSequence())
+        Timber.i(
+            "CannulaFill attempt=%d event=begin reason=%s baselineSequence=%d",
+            next.attemptId,
+            reason,
+            next.acceptEventsAfterSequence,
+        )
+        cannulaWorkflowState = next
+        subScreen = CartridgeSubScreen.FILL_CANNULA
+        if (developerPreviewEnabled) {
+            refreshScope.launch {
+                delay(350)
+                developerSimulation.emitCannulaReadiness()
+            }
+        } else {
+            sendPumpCommands(
+                SendType.BUST_CACHE,
+                listOf(
+                    TimeSinceResetRequest(),
+                    HomeScreenMirrorRequest(),
+                    LoadStatusRequest(),
+                ),
+            )
+        }
+    }
+
+    fun beginSiteChangeReminderUpdate() {
+        val existingPlan = cannulaWorkflowState.reminderPlan
+        if (existingPlan != null) {
+            val next = markSettingSiteChangeReminder(
+                cannulaWorkflowState,
+                existingPlan,
+                currentPumpMessageSequence(),
+            )
+            updateCannulaWorkflowState(next, "send-site-change-reminder")
+            Timber.i(
+                "CannulaFill attempt=%d event=send-site-change-reminder days=%d timeMinutes=%d bitmask=%d",
+                next.attemptId,
+                existingPlan.dayCount,
+                existingPlan.timeOfDayMinutes,
+                existingPlan.changeBitmask,
+            )
+            if (developerPreviewEnabled) {
+                refreshScope.launch {
+                    delay(350)
+                    developerSimulation.acceptSiteChangeReminder(
+                        existingPlan.dayCount,
+                        existingPlan.timeOfDayMinutes.toInt(),
+                    )
+                }
+            } else {
+                sendPumpCommands(
+                    SendType.BUST_CACHE,
+                    listOf(createSiteChangeReminderRequest(existingPlan)),
+                )
+            }
+        } else {
+            // Always read the pump after fill confirmation; don't derive a write from stale data.
+            val next = markLoadingReminderConfiguration(
+                cannulaWorkflowState,
+                currentPumpMessageSequence(),
+            )
+            updateCannulaWorkflowState(next, "load-site-change-reminder-configuration")
+            if (developerPreviewEnabled) {
+                refreshScope.launch {
+                    delay(350)
+                    developerSimulation.emitReminderConfiguration(enabled = false)
+                }
+            } else {
+                sendPumpCommands(SendType.BUST_CACHE, listOf(RemindersRequest()))
+            }
+        }
+    }
+
     fun fetchDataStoreFields(type: SendType) {
         sendPumpCommands(type, cartridgeActionsCommands)
     }
@@ -118,13 +285,6 @@ fun CartridgeActions(
         sendPumpCommands(type, cartridgeNotificationCommands)
         delay(500)
         notificationsRefreshing = false
-    }
-
-    fun requestHomeMirrorBurst() = refreshScope.launch {
-        repeat(5) {
-            delay(1000)
-            sendPumpCommands(SendType.BUST_CACHE, listOf(HomeScreenMirrorRequest()))
-        }
     }
 
     fun refreshWorkflowState(type: SendType = SendType.STANDARD) {
@@ -187,22 +347,107 @@ fun CartridgeActions(
     val inFillTubingMode = ds.inFillTubingMode.observeAsState()
     val fillTubingState = ds.fillTubingState.observeAsState()
     val exitFillTubingState = ds.exitFillTubingState.observeAsState()
-    val fillCannulaState = ds.fillCannulaState.observeAsState()
     val loadStatusResponse = ds.loadStatusResponse.observeAsState()
     val notificationBundle = ds.notificationBundle.observeAsState()
-    val activeNotifications = notificationBundle.value?.get() ?: emptyList()
-    val requiredSubScreen = resolveRequiredCartridgeSubScreen(
-        loadStatus = loadStatusResponse.value,
-        inChangeCartridgeMode = inChangeCartridgeMode.value == true,
-        enterChangeCartridgeState = enterChangeCartridgeState.value,
-        detectingCartridgeState = detectingCartridgeState.value,
-        inFillTubingMode = inFillTubingMode.value == true,
-        exitFillTubingState = exitFillTubingState.value,
+    val observedBasalStatus = if (developerPreviewEnabled) developerSimulation.basalStatus else basalStatus.value
+    val observedBasalStatusEvent = if (developerPreviewEnabled) developerSimulation.basalStatusEvent else basalStatusEvent.value
+    val observedLoadStatusResponse = if (developerPreviewEnabled) developerSimulation.loadStatusResponse else loadStatusResponse.value
+    val observedLoadStatusEvent = if (developerPreviewEnabled) developerSimulation.loadStatusEvent else loadStatusEvent.value
+    val observedInChangeCartridgeMode = if (developerPreviewEnabled) developerSimulation.inChangeCartridgeMode else inChangeCartridgeMode.value == true
+    val observedEnterChangeCartridgeState = if (developerPreviewEnabled) developerSimulation.enterChangeCartridgeState else enterChangeCartridgeState.value
+    val observedDetectingCartridgeState = if (developerPreviewEnabled) developerSimulation.detectingCartridgeState else detectingCartridgeState.value
+    val observedInFillTubingMode = if (developerPreviewEnabled) developerSimulation.inFillTubingMode else inFillTubingMode.value == true
+    val observedFillTubingButtonDown = if (developerPreviewEnabled) developerSimulation.fillTubingButtonDown else fillTubingState.value?.buttonDown
+    val observedExitFillTubingState = if (developerPreviewEnabled) developerSimulation.exitFillTubingState else exitFillTubingState.value
+    val observedEnterFillTubingModeResponseEvent = if (developerPreviewEnabled) {
+        developerSimulation.enterFillTubingModeResponseEvent
+    } else {
+        enterFillTubingModeResponseEvent.value
+    }
+    val observedExitFillTubingModeResponseEvent = if (developerPreviewEnabled) {
+        developerSimulation.exitFillTubingModeResponseEvent
+    } else {
+        exitFillTubingModeResponseEvent.value
+    }
+    val observedFillCannulaResponseEvent = if (developerPreviewEnabled) developerSimulation.fillCannulaResponseEvent else fillCannulaResponseEvent.value
+    val observedFillCannulaStateEvent = if (developerPreviewEnabled) developerSimulation.fillCannulaStateEvent else fillCannulaStateEvent.value
+    val observedRemindersEvent = if (developerPreviewEnabled) developerSimulation.remindersEvent else remindersEvent.value
+    val observedSiteChangeReminderResponseEvent = if (developerPreviewEnabled) developerSimulation.siteChangeReminderResponseEvent else siteChangeReminderResponseEvent.value
+    val activeNotifications = if (developerPreviewEnabled) emptyList() else notificationBundle.value?.get() ?: emptyList()
+    val incompleteWorkflow = if (developerPreviewEnabled) null else resolveIncompleteCartridgePhase(
+        loadStatus = observedLoadStatusResponse,
+        inChangeCartridgeMode = observedInChangeCartridgeMode,
+        enterChangeCartridgeState = observedEnterChangeCartridgeState,
+        detectingCartridgeState = observedDetectingCartridgeState,
+        inFillTubingMode = observedInFillTubingMode,
+        exitFillTubingState = observedExitFillTubingState,
     )
+    val requiredSubScreen = incompleteWorkflow?.toCartridgeSubScreen()
     val menuAvailability = resolveCartridgeMenuAvailability(requiredSubScreen)
+    val deliverySuspended = observedBasalStatus.isManuallySuspendedForCartridgeWorkflow()
+    val resumeDecision = if (developerPreviewEnabled && observedLoadStatusResponse == null) {
+        CartridgeResumeDecision(true, "Resume simulated insulin delivery?")
+    } else {
+        evaluateCartridgeResume(observedLoadStatusResponse)
+    }
+    val cannulaReadiness = evaluateCannulaFillReadiness(
+        observedBasalStatusEvent,
+        observedLoadStatusEvent,
+        cannulaWorkflowState.acceptEventsAfterSequence,
+    )
+    val completedCannulaFillEpochMillis = latestCompletedCannulaHistoryItem?.pumpTimeLocal()
+        ?.atZone(java.time.ZoneId.systemDefault())
+        ?.toInstant()
+        ?.toEpochMilli()
+    val lastCannulaFillText = latestCompletedCannulaHistoryItem?.pumpTimeLocal()
+        ?.let(::formatPumpRecordedCannulaFillTimestamp)
+    val cannulaFillAgeText = latestCompletedCannulaHistoryItem?.let { item ->
+        pumpClock.value?.currentTime?.let { currentPumpTimeSec ->
+            pumpTimeline.elapsedSecondsSince(
+                seqId = item.seqId,
+                historicalPumpTimeSec = item.pumpTimeSec,
+                currentPumpTimeSec = currentPumpTimeSec,
+            ).let(::formatCannulaFillAge)
+        }
+    }
+    val nextSiteChangeEpochMillis = completedCannulaFillEpochMillis?.let { lastFill ->
+        nextSiteChangeReminderEpochMillis(lastFill, observedRemindersEvent?.message)
+    }
+    val nextSiteChangeText = when {
+        latestCompletedCannulaHistoryItem == null -> "Not available until a completed fill is loaded"
+        observedRemindersEvent == null -> "Checking pump reminder…"
+        observedRemindersEvent.message.siteChangeReminder?.enabled == 0 -> "No reminder scheduled"
+        nextSiteChangeEpochMillis == null -> "Pump reminder unavailable"
+        else -> formatCannulaFillTimestamp(nextSiteChangeEpochMillis)
+    }
 
-    LaunchedEffect(exitFillTubingState.value?.state) {
-        if (exitFillTubingState.value?.state == ExitFillTubingModeStateStreamResponse.ExitFillTubingModeState.TUBING_FILLED) {
+    LaunchedEffect(latestCompletedCannulaHistoryItem?.seqId, pumpSid.value) {
+        val item = latestCompletedCannulaHistoryItem ?: return@LaunchedEffect
+        val completedAt = completedCannulaFillEpochMillis ?: return@LaunchedEffect
+        if (pumpSid.value >= 0) {
+            prefs.setLastCannulaFillEpochMillis(completedAt, pumpSid.value)
+        }
+        Timber.i(
+            "CannulaFill history-completed seq=%d pumpTimeSec=%d pumpSid=%d",
+            item.seqId,
+            item.pumpTimeSec,
+            pumpSid.value,
+        )
+    }
+
+    LaunchedEffect(latestTubingHistoryItem?.seqId) {
+        val item = latestTubingHistoryItem ?: return@LaunchedEffect
+        if (runCatching { item.parse() }.getOrNull() is TubingFilledHistoryLog) {
+            Timber.i(
+                "FillTubing history-confirmed completion seq=%d pumpTimeSec=%d",
+                item.seqId,
+                item.pumpTimeSec,
+            )
+        }
+    }
+
+    LaunchedEffect(observedExitFillTubingState?.state) {
+        if (observedExitFillTubingState?.state == ExitFillTubingModeStateStreamResponse.ExitFillTubingModeState.TUBING_FILLED) {
             tubingExitRequested = false
         }
     }
@@ -210,12 +455,23 @@ fun CartridgeActions(
     // Force a fresh load-status read when the Cartridge Actions screen is opened.
     LaunchedEffect(Unit) {
         refreshWorkflowState(SendType.BUST_CACHE)
+        if (!developerPreviewEnabled) {
+            sendPumpCommands(SendType.BUST_CACHE, listOf(HistoryLogStatusRequest()))
+        }
     }
 
     LaunchedEffect(subScreen) {
-        if (subScreen != CartridgeSubScreen.MENU) {
+        if (subScreen == CartridgeSubScreen.FILL_CANNULA && cannulaWorkflowState.attemptId == 0L) {
+            beginCannulaAttempt("initial-route")
+        } else if (subScreen != CartridgeSubScreen.MENU) {
             refreshWorkflowState(SendType.BUST_CACHE)
         }
+    }
+
+    LaunchedEffect(resumeRequestedPhase) {
+        val requestedPhase = resumeRequestedPhase ?: return@LaunchedEffect
+        subScreen = requestedPhase.toCartridgeSubScreen()
+        onResumeRequestConsumed()
     }
 
     LaunchedEffect(
@@ -227,12 +483,260 @@ fun CartridgeActions(
         inFillTubingMode.value,
         fillTubingState.value,
         exitFillTubingState.value,
-        fillCannulaState.value,
     ) {
-        if (subScreen == CartridgeSubScreen.MENU) return@LaunchedEffect
+        if (subScreen == CartridgeSubScreen.MENU) {
+            // Closing an incomplete workflow is navigation-only. Keep the pump-required phase
+            // visible on the menu instead of immediately forcing the user back into the wizard.
+            return@LaunchedEffect
+        }
+        if (subScreen == CartridgeSubScreen.FILL_CANNULA && cannulaWorkflowState.attemptId > 0L) {
+            return@LaunchedEffect
+        }
         val syncedScreen = requiredSubScreen
         if (syncedScreen != null && syncedScreen != subScreen) {
             subScreen = syncedScreen
+        }
+    }
+
+    LaunchedEffect(
+        subScreen,
+        cannulaWorkflowState.phase,
+        cannulaWorkflowState.attemptId,
+        observedBasalStatus,
+        observedBasalStatusEvent,
+        observedLoadStatusEvent,
+        observedFillCannulaResponseEvent,
+        observedFillCannulaStateEvent,
+        observedRemindersEvent,
+        observedSiteChangeReminderResponseEvent,
+    ) {
+        if (subScreen != CartridgeSubScreen.FILL_CANNULA || cannulaWorkflowState.attemptId == 0L) {
+            return@LaunchedEffect
+        }
+
+        when (cannulaWorkflowState.phase) {
+            CannulaFillPhase.CHECKING_PUMP -> {
+                when (cannulaReadiness.kind) {
+                    CannulaFillReadinessKind.READY -> {
+                        val shouldSendFill = cannulaWorkflowState.sendFillWhenReady
+                        val next = if (shouldSendFill) {
+                            markCannulaFillRequested(
+                                cannulaWorkflowState,
+                                currentPumpMessageSequence(),
+                            )
+                        } else {
+                            cannulaWorkflowState.copy(phase = CannulaFillPhase.READY, error = null)
+                        }
+                        updateCannulaWorkflowState(
+                            next,
+                            if (shouldSendFill) {
+                                "final-readiness-confirmed-send-fill"
+                            } else {
+                                "fresh-pump-state-ready"
+                            },
+                        )
+                        if (shouldSendFill) {
+                            Timber.i(
+                                "CannulaFill attempt=%d event=send-fill amountUnits=%.1f baselineSequence=%d",
+                                next.attemptId,
+                                cannulaPrimeAmount,
+                                next.acceptEventsAfterSequence,
+                            )
+                            if (developerPreviewEnabled) {
+                                refreshScope.launch {
+                                    delay(450)
+                                    developerSimulation.acceptCannulaFill()
+                                    delay(650)
+                                    developerSimulation.completeCannulaFill()
+                                }
+                            } else {
+                                val primeMilliUnits = cannulaPrimeMilliUnitsOrNull(cannulaPrimeAmount)
+                                if (primeMilliUnits == null) {
+                                    updateCannulaWorkflowState(
+                                        failCannulaFill(
+                                            next,
+                                            "The selected cannula amount could not be encoded exactly for the pump.",
+                                        ),
+                                        "fill-request-invalid-exact-units",
+                                    )
+                                    return@LaunchedEffect
+                                }
+                                sendPumpCommands(
+                                    SendType.BUST_CACHE,
+                                    listOf(FillCannulaRequest(primeMilliUnits)),
+                                )
+                            }
+                        }
+                    }
+                    CannulaFillReadinessKind.BLOCKED -> updateCannulaWorkflowState(
+                        failCannulaFill(cannulaWorkflowState, cannulaReadiness.message),
+                        "fresh-pump-state-blocked",
+                    )
+                    CannulaFillReadinessKind.NEEDS_SUSPEND,
+                    CannulaFillReadinessKind.WAITING_FOR_FRESH_STATE -> {}
+                }
+            }
+            CannulaFillPhase.REQUESTING_FILL -> updateCannulaWorkflowState(
+                applyFillCannulaResponse(cannulaWorkflowState, observedFillCannulaResponseEvent),
+                "fill-response",
+            )
+            CannulaFillPhase.WAITING_FOR_COMPLETION -> updateCannulaWorkflowState(
+                applyFillCannulaCompletion(
+                    cannulaWorkflowState,
+                    observedFillCannulaStateEvent,
+                ),
+                "fill-completion-stream",
+            )
+            CannulaFillPhase.FILL_CONFIRMED -> {
+                // The completion stream advances the workflow. The displayed/persisted completion
+                // time is updated only when CannulaFilledHistoryLog arrives.
+                if (!developerPreviewEnabled) {
+                    sendPumpCommands(SendType.BUST_CACHE, listOf(HistoryLogStatusRequest()))
+                }
+                beginSiteChangeReminderUpdate()
+            }
+            CannulaFillPhase.LOADING_REMINDER_CONFIGURATION -> {
+                val event = observedRemindersEvent
+                if (event != null && event.sequence > cannulaWorkflowState.acceptEventsAfterSequence) {
+                    val planningResult = planSiteChangeReminder(event.message)
+                    val plan = planningResult.plan
+                    if (plan == null) {
+                        updateCannulaWorkflowState(
+                            failSiteChangeReminder(
+                                cannulaWorkflowState,
+                                "Cannula fill completed, but ${planningResult.error ?: "the site-change reminder could not be configured"}",
+                            ),
+                            "site-change-reminder-configuration-failed",
+                        )
+                    } else {
+                        val next = markSettingSiteChangeReminder(
+                            cannulaWorkflowState,
+                            plan,
+                            currentPumpMessageSequence(),
+                        )
+                        updateCannulaWorkflowState(next, "send-site-change-reminder-after-read")
+                        Timber.i(
+                            "CannulaFill attempt=%d event=send-site-change-reminder days=%d timeMinutes=%d bitmask=%d",
+                            next.attemptId,
+                            plan.dayCount,
+                            plan.timeOfDayMinutes,
+                            plan.changeBitmask,
+                        )
+                        if (developerPreviewEnabled) {
+                            refreshScope.launch {
+                                delay(400)
+                                developerSimulation.acceptSiteChangeReminder(
+                                    plan.dayCount,
+                                    plan.timeOfDayMinutes.toInt(),
+                                )
+                            }
+                        } else {
+                            sendPumpCommands(
+                                SendType.BUST_CACHE,
+                                listOf(createSiteChangeReminderRequest(plan)),
+                            )
+                        }
+                    }
+                }
+            }
+            CannulaFillPhase.SETTING_REMINDER -> updateCannulaWorkflowState(
+                applySiteChangeReminderResponse(
+                    cannulaWorkflowState,
+                    observedSiteChangeReminderResponseEvent,
+                ),
+                "site-change-reminder-response",
+            )
+            CannulaFillPhase.REMINDER_RESPONSE_ACCEPTED -> {
+                val next = markVerifyingSiteChangeReminder(
+                    cannulaWorkflowState,
+                    currentPumpMessageSequence(),
+                )
+                updateCannulaWorkflowState(next, "read-back-site-change-reminder")
+                if (developerPreviewEnabled) {
+                    refreshScope.launch {
+                        delay(350)
+                        developerSimulation.emitReminderConfiguration(enabled = true)
+                    }
+                } else {
+                    sendPumpCommands(SendType.BUST_CACHE, listOf(RemindersRequest()))
+                }
+            }
+            CannulaFillPhase.VERIFYING_REMINDER -> updateCannulaWorkflowState(
+                applySiteChangeReminderReadback(cannulaWorkflowState, observedRemindersEvent),
+                "site-change-reminder-readback",
+            )
+            CannulaFillPhase.READY,
+            CannulaFillPhase.COMPLETE,
+            CannulaFillPhase.FILL_FAILED,
+            CannulaFillPhase.COMPLETE_REMINDER_FAILED -> {}
+        }
+    }
+
+    LaunchedEffect(
+        subScreen,
+        cannulaWorkflowState.attemptId,
+        cannulaWorkflowState.phase,
+        cannulaReadiness.kind,
+    ) {
+        if (subScreen != CartridgeSubScreen.FILL_CANNULA || cannulaWorkflowState.attemptId == 0L) {
+            return@LaunchedEffect
+        }
+        val phaseAtStart = cannulaWorkflowState.phase
+        val timeoutMillis = when (phaseAtStart) {
+            CannulaFillPhase.CHECKING_PUMP ->
+                if (cannulaReadiness.kind == CannulaFillReadinessKind.WAITING_FOR_FRESH_STATE) {
+                    FILL_CANNULA_RESPONSE_TIMEOUT_MS
+                } else null
+            CannulaFillPhase.REQUESTING_FILL -> FILL_CANNULA_RESPONSE_TIMEOUT_MS
+            CannulaFillPhase.WAITING_FOR_COMPLETION -> FILL_CANNULA_COMPLETION_TIMEOUT_MS
+            CannulaFillPhase.LOADING_REMINDER_CONFIGURATION,
+            CannulaFillPhase.SETTING_REMINDER,
+            CannulaFillPhase.VERIFYING_REMINDER -> SITE_CHANGE_REMINDER_TIMEOUT_MS
+            else -> null
+        } ?: return@LaunchedEffect
+
+        delay(timeoutMillis)
+        if (
+            subScreen != CartridgeSubScreen.FILL_CANNULA ||
+            cannulaWorkflowState.attemptId == 0L ||
+            cannulaWorkflowState.phase != phaseAtStart
+        ) {
+            return@LaunchedEffect
+        }
+
+        if (
+            phaseAtStart == CannulaFillPhase.CHECKING_PUMP ||
+            phaseAtStart == CannulaFillPhase.REQUESTING_FILL ||
+            phaseAtStart == CannulaFillPhase.WAITING_FOR_COMPLETION
+        ) {
+            if (!developerPreviewEnabled) {
+                sendPumpCommands(SendType.BUST_CACHE, listOf(LoadStatusRequest()))
+            }
+            delay(750)
+            if (cannulaWorkflowState.phase == phaseAtStart) {
+                val timeoutDetail = when (phaseAtStart) {
+                    CannulaFillPhase.WAITING_FOR_COMPLETION ->
+                        "The pump accepted the request, but no completion signal arrived. The fill may have occurred; inspect the pump and cannula before starting another fill."
+                    CannulaFillPhase.REQUESTING_FILL ->
+                        "No acceptance response arrived. Verify the pump state before starting another fill."
+                    else -> "Fresh pump state was not received."
+                }
+                updateCannulaWorkflowState(
+                    failCannulaFill(
+                        cannulaWorkflowState,
+                        "$timeoutDetail Pump reports ${describeLoadStatus(observedLoadStatusResponse)}.",
+                    ),
+                    "fill-timeout",
+                )
+            }
+        } else {
+            updateCannulaWorkflowState(
+                failSiteChangeReminder(
+                    cannulaWorkflowState,
+                    "Cannula fill completed, but the site-change reminder timed out during ${phaseAtStart.name.lowercase().replace('_', ' ')}.",
+                ),
+                "site-change-reminder-timeout",
+            )
         }
     }
 
@@ -242,15 +746,47 @@ fun CartridgeActions(
         when (subScreen) {
             CartridgeSubScreen.MENU -> CartridgeActionsMenuScreen(
                 innerPadding = innerPadding,
-                deviceName = deviceName.value ?: "",
-                changeCartridgeEnabled = menuAvailability.canChangeCartridge,
-                changeCartridgeDisabledReason = menuAvailability.changeCartridgeDisabledReason,
-                fillTubingEnabled = menuAvailability.canFillTubing,
-                fillTubingDisabledReason = menuAvailability.fillTubingDisabledReason,
-                fillCannulaEnabled = menuAvailability.canFillCannula,
-                fillCannulaDisabledReason = menuAvailability.fillCannulaDisabledReason,
+                deviceName = if (developerPreviewEnabled) "Mobi (simulated)" else deviceName.value ?: "",
+                developerPreview = developerPreviewEnabled,
+                basalStatus = observedBasalStatus,
+                changeCartridgeEnabled = deliverySuspended && menuAvailability.canChangeCartridge,
+                changeCartridgeDisabledReason = if (!deliverySuspended) {
+                    "Suspend insulin delivery to begin."
+                } else menuAvailability.changeCartridgeDisabledReason,
+                fillTubingEnabled = deliverySuspended && menuAvailability.canFillTubing,
+                fillTubingDisabledReason = if (!deliverySuspended) {
+                    "Suspend insulin delivery to begin."
+                } else menuAvailability.fillTubingDisabledReason,
+                fillCannulaEnabled = deliverySuspended && menuAvailability.canFillCannula,
+                fillCannulaDisabledReason = if (!deliverySuspended) {
+                    "Suspend insulin delivery to begin."
+                } else menuAvailability.fillCannulaDisabledReason,
+                lastInfusionSetChangeText = lastCannulaFillText ?: when {
+                    cannulaHistoryItems == null -> "Checking pump history…"
+                    else -> "No completed fill in loaded pump history"
+                },
+                infusionSetAgeText = cannulaFillAgeText ?: when {
+                    latestCompletedCannulaHistoryItem == null -> "Not available"
+                    pumpClock.value == null -> "Checking current pump time…"
+                    else -> "Pump timeline unavailable"
+                },
+                nextInfusionSetChangeText = nextSiteChangeText,
+                resumeDeliveryEnabled = resumeDecision.canResume,
+                resumeDeliveryDisabledReason = resumeDecision.message,
+                deliveryTransition = deliveryTransition,
+                pumpConnected = pumpConnected,
+                incompleteWorkflow = incompleteWorkflow,
+                onContinueIncompleteWorkflow = {
+                    incompleteWorkflow?.let { subScreen = it.toCartridgeSubScreen() }
+                },
+                onCheckDeliveryStatus = onCheckDeliveryStatus,
                 onChangeCartridge = {
-                    if (!menuAvailability.canChangeCartridge) {
+                    if (!deliverySuspended || !menuAvailability.canChangeCartridge) {
+                        return@CartridgeActionsMenuScreen
+                    }
+                    if (developerPreviewEnabled) {
+                        developerSimulation.start(DeveloperCartridgeDemoPath.FULL_CARTRIDGE_LOAD)
+                        subScreen = CartridgeSubScreen.CHANGE_CARTRIDGE
                         return@CartridgeActionsMenuScreen
                     }
                     refreshScope.launch {
@@ -261,11 +797,21 @@ fun CartridgeActions(
                     }
                 },
                 onFillTubing = {
-                    if (!menuAvailability.canFillTubing) {
+                    if (!deliverySuspended || !menuAvailability.canFillTubing) {
+                        return@CartridgeActionsMenuScreen
+                    }
+                    if (developerPreviewEnabled) {
+                        developerSimulation.start(DeveloperCartridgeDemoPath.START_AT_FILL_TUBING)
+                        subScreen = CartridgeSubScreen.FILL_TUBING
                         return@CartridgeActionsMenuScreen
                     }
                     refreshScope.launch {
                         tubingExitRequested = false
+                        // A prior attempt's terminal stream values are observations, not current
+                        // pump state. Clear them only when the user explicitly starts a new
+                        // standalone attempt so they cannot make the new workflow appear complete.
+                        ds.fillTubingState.value = null
+                        ds.exitFillTubingState.value = null
                         sendPumpCommands(SendType.BUST_CACHE, listOf(TimeSinceResetRequest()))
                         refreshWorkflowState(SendType.BUST_CACHE)
                         refreshNotifications()
@@ -273,93 +819,234 @@ fun CartridgeActions(
                     }
                 },
                 onFillCannula = {
-                    if (!menuAvailability.canFillCannula) {
+                    if (!deliverySuspended || !menuAvailability.canFillCannula) {
                         return@CartridgeActionsMenuScreen
                     }
-                    refreshScope.launch {
-                        cannulaPrimeAmount = 0.3
-                        sendPumpCommands(SendType.BUST_CACHE, listOf(TimeSinceResetRequest()))
-                        refreshWorkflowState(SendType.BUST_CACHE)
-                        subScreen = CartridgeSubScreen.FILL_CANNULA
+                    if (developerPreviewEnabled) {
+                        developerSimulation.start(DeveloperCartridgeDemoPath.FILL_CANNULA_ONLY)
                     }
+                    beginCannulaAttempt("menu")
+                },
+                onSuspendDelivery = {
+                    if (developerPreviewEnabled) {
+                        developerSimulation.suspendDelivery()
+                    }
+                    onSuspendDelivery()
+                },
+                onResumeDelivery = {
+                    if (!resumeDecision.canResume) return@CartridgeActionsMenuScreen
+                    if (developerPreviewEnabled) {
+                        developerSimulation.resumeDelivery()
+                    }
+                    onResumeDelivery()
                 },
                 onBack = navigateBack,
             )
 
             CartridgeSubScreen.CHANGE_CARTRIDGE -> ChangeCartridgeWorkflowScreen(
                 innerPadding = innerPadding,
-                basalStatus = basalStatus.value,
-                inChangeCartridgeMode = inChangeCartridgeMode.value == true,
-                enterChangeCartridgeState = enterChangeCartridgeState.value,
-                detectingCartridgeState = detectingCartridgeState.value,
+                basalStatus = observedBasalStatus,
+                inChangeCartridgeMode = observedInChangeCartridgeMode,
+                enterChangeCartridgeState = observedEnterChangeCartridgeState,
+                detectingCartridgeState = observedDetectingCartridgeState,
                 activeNotifications = activeNotifications,
                 notificationsRefreshing = notificationsRefreshing,
                 sendPumpCommands = sendPumpCommands,
                 refreshNotifications = { refreshNotifications() },
-                onDismiss = { subScreen = CartridgeSubScreen.MENU },
-                onSuspend = {
-                    sendPumpCommands(SendType.BUST_CACHE, listOf(SuspendPumpingRequest()))
-                    requestHomeMirrorBurst()
+                onDismiss = {
+                    if (developerPreviewEnabled) developerSimulation.finish()
+                    subScreen = CartridgeSubScreen.MENU
                 },
-                onEnter = { sendPumpCommands(SendType.BUST_CACHE, listOf(EnterChangeCartridgeModeRequest())) },
-                onExit = { sendPumpCommands(SendType.BUST_CACHE, listOf(ExitChangeCartridgeModeRequest())) },
-                onDone = { subScreen = CartridgeSubScreen.MENU },
-                onCancelInProgress = { sendPumpCommands(SendType.BUST_CACHE, listOf(ExitChangeCartridgeModeRequest())) },
+                onEnter = {
+                    if (developerPreviewEnabled) {
+                        developerSimulation.enterChangeCartridgeMode()
+                        refreshScope.launch {
+                            delay(650)
+                            developerSimulation.markReadyForCartridge()
+                        }
+                    } else {
+                        sendPumpCommands(SendType.BUST_CACHE, listOf(EnterChangeCartridgeModeRequest()))
+                    }
+                },
+                onExit = {
+                    if (developerPreviewEnabled) {
+                        refreshScope.launch {
+                            developerSimulation.setCartridgeDetectionProgress(20)
+                            delay(350)
+                            developerSimulation.setCartridgeDetectionProgress(60)
+                            delay(350)
+                            developerSimulation.setCartridgeDetectionProgress(100)
+                        }
+                    } else {
+                        sendPumpCommands(SendType.BUST_CACHE, listOf(ExitChangeCartridgeModeRequest()))
+                    }
+                },
+                onDone = {
+                    if (developerPreviewEnabled) {
+                        developerSimulation.prepareFillTubing()
+                    } else {
+                        // The completed cartridge step starts a new mandatory tubing attempt.
+                        // Do not carry terminal observations from an older tubing fill into it.
+                        tubingExitRequested = false
+                        ds.fillTubingState.value = null
+                        ds.exitFillTubingState.value = null
+                    }
+                    subScreen = CartridgeSubScreen.FILL_TUBING
+                },
             )
 
             CartridgeSubScreen.FILL_TUBING -> FillTubingWorkflowScreen(
                 innerPadding = innerPadding,
-                basalStatus = basalStatus.value,
-                inFillTubingMode = inFillTubingMode.value == true,
-                fillTubingButtonDown = fillTubingState.value?.buttonDown,
-                exitFillTubingState = exitFillTubingState.value,
-                exitRequested = tubingExitRequested,
+                developerPreview = developerPreviewEnabled,
+                basalStatus = observedBasalStatus,
+                inFillTubingMode = observedInFillTubingMode,
+                fillTubingButtonDown = observedFillTubingButtonDown,
+                exitFillTubingState = observedExitFillTubingState,
+                enterFillTubingModeResponseEvent = observedEnterFillTubingModeResponseEvent,
+                exitFillTubingModeResponseEvent = observedExitFillTubingModeResponseEvent,
+                exitRequested = if (developerPreviewEnabled) developerSimulation.tubingExitRequested else tubingExitRequested,
                 activeNotifications = activeNotifications,
                 notificationsRefreshing = notificationsRefreshing,
                 sendPumpCommands = sendPumpCommands,
                 refreshNotifications = { refreshNotifications() },
-                onDismiss = { subScreen = CartridgeSubScreen.MENU },
-                onSuspend = {
-                    sendPumpCommands(SendType.BUST_CACHE, listOf(SuspendPumpingRequest()))
-                    requestHomeMirrorBurst()
+                requestAuthentication = if (developerPreviewEnabled) {
+                    { _, result -> result(BolusAuthenticationResult.Succeeded) }
+                } else {
+                    requestSettingsAuthentication
+                },
+                onDismissPumpPauseAlert = {
+                    if (!developerPreviewEnabled) {
+                        sendPumpCommands(
+                            SendType.BUST_CACHE,
+                            listOf(fillTubingPauseDismissRequest()),
+                        )
+                    }
+                },
+                onDismiss = {
+                    if (developerPreviewEnabled) developerSimulation.finish()
+                    subScreen = CartridgeSubScreen.MENU
                 },
                 onBeginFillTubing = {
-                    tubingExitRequested = false
-                    sendPumpCommands(SendType.BUST_CACHE, listOf(EnterFillTubingModeRequest()))
+                    if (developerPreviewEnabled) {
+                        refreshScope.launch {
+                            delay(350)
+                            developerSimulation.enterFillTubingMode()
+                        }
+                    } else {
+                        tubingExitRequested = false
+                        sendPumpCommands(SendType.BUST_CACHE, listOf(EnterFillTubingModeRequest()))
+                    }
+                },
+                onEnterRequestFailed = {
+                    if (!developerPreviewEnabled) refreshWorkflowState(SendType.BUST_CACHE)
                 },
                 onFinishFillTubing = {
-                    tubingExitRequested = true
-                    sendPumpCommands(SendType.BUST_CACHE, listOf(ExitFillTubingModeRequest()))
+                    if (developerPreviewEnabled) {
+                        developerSimulation.requestTubingExit()
+                        refreshScope.launch {
+                            delay(550)
+                            developerSimulation.finishTubing()
+                        }
+                    } else {
+                        tubingExitRequested = true
+                        sendPumpCommands(SendType.BUST_CACHE, listOf(ExitFillTubingModeRequest()))
+                    }
                 },
-                onDone = { subScreen = CartridgeSubScreen.MENU },
-                onCancelInProgress = {
-                    tubingExitRequested = true
-                    sendPumpCommands(SendType.BUST_CACHE, listOf(ExitFillTubingModeRequest()))
+                onExitRequestFailed = {
+                    tubingExitRequested = false
+                    if (!developerPreviewEnabled) refreshWorkflowState(SendType.BUST_CACHE)
+                },
+                onSimulatedPumpButtonChange = { developerSimulation.setTubingButtonDown(it) },
+                onDone = {
+                    if (developerPreviewEnabled) developerSimulation.finish()
+                    if (!developerPreviewEnabled) {
+                        sendPumpCommands(
+                            SendType.BUST_CACHE,
+                            listOf(HistoryLogStatusRequest(), LoadStatusRequest()),
+                        )
+                    }
+                    subScreen = CartridgeSubScreen.MENU
                 },
             )
 
             CartridgeSubScreen.FILL_CANNULA -> FillCannulaWorkflowScreen(
                 innerPadding = innerPadding,
-                basalStatus = basalStatus.value,
-                fillCannulaState = fillCannulaState.value,
+                basalStatus = observedBasalStatus,
+                workflowState = cannulaWorkflowState,
+                readiness = cannulaReadiness,
                 primeAmount = cannulaPrimeAmount,
-                onPrimeAmountChange = { cannulaPrimeAmount = it },
-                onDismiss = { subScreen = CartridgeSubScreen.MENU },
-                onSuspend = {
-                    sendPumpCommands(SendType.BUST_CACHE, listOf(SuspendPumpingRequest()))
-                    requestHomeMirrorBurst()
+                reminderDays = cannulaReminderDays,
+                reminderTimeMinutes = cannulaReminderTimeMinutes,
+                lastCompletedText = lastCannulaFillText,
+                onPrimeAmountChange = {
+                    cannulaPrimeAmount = it
+                    prefs.setCannulaPrimeAmount(it)
                 },
-                onResume = {
-                    sendPumpCommands(SendType.BUST_CACHE, listOf(ResumePumpingRequest()))
-                    requestHomeMirrorBurst()
-                },
-                onDone = { subScreen = CartridgeSubScreen.MENU },
-                onSendFillRequest = {
-                    sendPumpCommands(
-                        SendType.BUST_CACHE,
-                        listOf(FillCannulaRequest(InsulinUnit.from1To1000(cannulaPrimeAmount).toInt()))
+                onReminderDaysChange = { cannulaReminderDays = it },
+                onReminderTimeChange = { cannulaReminderTimeMinutes = it },
+                onSaveReminderPreference = {
+                    prefs.setCannulaReminderPreference(
+                        cannulaReminderDays,
+                        cannulaReminderTimeMinutes,
                     )
-                }
+                },
+                onDismiss = {
+                    Timber.i("CannulaFill attempt=%d event=dismiss", cannulaWorkflowState.attemptId)
+                    cannulaWorkflowState = CannulaFillAttemptState.begin(
+                        cannulaAttemptId,
+                        currentPumpMessageSequence(),
+                    )
+                    if (developerPreviewEnabled) developerSimulation.finish()
+                    subScreen = CartridgeSubScreen.MENU
+                },
+                onDone = {
+                    Timber.i("CannulaFill attempt=%d event=done", cannulaWorkflowState.attemptId)
+                    cannulaWorkflowState = CannulaFillAttemptState.begin(
+                        cannulaAttemptId,
+                        currentPumpMessageSequence(),
+                    )
+                    if (developerPreviewEnabled) developerSimulation.finish()
+                    subScreen = CartridgeSubScreen.MENU
+                },
+                requestAuthentication = if (developerPreviewEnabled) {
+                    { _, result -> result(BolusAuthenticationResult.Succeeded) }
+                } else {
+                    requestSettingsAuthentication
+                },
+                onSendFillRequest = {
+                    if (cannulaWorkflowState.phase != CannulaFillPhase.READY) {
+                        updateCannulaWorkflowState(
+                            failCannulaFill(
+                                cannulaWorkflowState,
+                                "The cannula-fill workflow was not ready for a request.",
+                            ),
+                            "fill-request-readiness-rejected",
+                        )
+                    } else {
+                        val reminderPlan = SiteChangeReminderPlan(
+                            cannulaReminderDays,
+                            cannulaReminderTimeMinutes.toLong(),
+                        )
+                        val next = markFinalCannulaReadinessCheck(
+                            cannulaWorkflowState.copy(reminderPlan = reminderPlan),
+                            currentPumpMessageSequence(),
+                        )
+                        updateCannulaWorkflowState(next, "final-readiness-check")
+                        if (developerPreviewEnabled) {
+                            refreshScope.launch {
+                                delay(350)
+                                developerSimulation.emitCannulaReadiness()
+                            }
+                        } else {
+                            sendPumpCommands(
+                                SendType.BUST_CACHE,
+                                listOf(HomeScreenMirrorRequest(), LoadStatusRequest()),
+                            )
+                        }
+                    }
+                },
+                onRetryFill = { beginCannulaAttempt("retry-fill") },
+                onRetryReminder = { beginSiteChangeReminderUpdate() },
             )
         }
     }
@@ -370,7 +1057,8 @@ val cartridgeActionsCommands = listOf(
     HomeScreenMirrorRequest(),
     CGMStatusRequest(),
     TimeSinceResetRequest(),
-    LoadStatusRequest()
+    LoadStatusRequest(),
+    RemindersRequest(),
 )
 
 fun cartridgeApiVersion(): ApiVersion {
@@ -383,7 +1071,7 @@ fun cartridgeApiVersion(): ApiVersion {
 
 val cartridgeNotificationCommands = listOf(
     HomeScreenMirrorRequest(),
-    *NotificationBundle.allRequests().toTypedArray(),
+    *pumpNotificationStatusRequests(cartridgeApiVersion()).toTypedArray(),
 ).filter { msg ->
     !msg.props().minApi.get().greaterThan(cartridgeApiVersion())
 }
@@ -401,86 +1089,10 @@ private data class CartridgeMenuAvailability(
     val fillCannulaDisabledReason: String?,
 )
 
-private fun resolveRequiredCartridgeSubScreen(
-    loadStatus: LoadStatusResponse?,
-    inChangeCartridgeMode: Boolean,
-    enterChangeCartridgeState: EnterChangeCartridgeModeStateStreamResponse?,
-    detectingCartridgeState: DetectingCartridgeStateStreamResponse?,
-    inFillTubingMode: Boolean,
-    exitFillTubingState: ExitFillTubingModeStateStreamResponse?,
-): CartridgeSubScreen? {
-    val resolvedLoadState = resolveLoadState(loadStatus)
-
-    // PRIME_NUDGE/PRIME_CANNULA with loading inactive indicates the prior flow completed,
-    // so don't force a specific entry point from the menu.
-    if (
-        loadStatus != null &&
-        !loadStatus.getIsLoadingActive() &&
-        (resolvedLoadState == LoadStatusResponse.LoadState.PRIME_NUDGE ||
-            resolvedLoadState == LoadStatusResponse.LoadState.PRIME_CANNULA)
-    ) {
-        return null
-    }
-
-    when (resolvedLoadState) {
-        LoadStatusResponse.LoadState.CHANGE_CARTRIDGE -> return CartridgeSubScreen.CHANGE_CARTRIDGE
-        LoadStatusResponse.LoadState.LOAD_CARTRIDGE -> return CartridgeSubScreen.FILL_TUBING
-        LoadStatusResponse.LoadState.PRIME_TUBING -> return CartridgeSubScreen.FILL_TUBING
-        LoadStatusResponse.LoadState.PRIME_CANNULA,
-        LoadStatusResponse.LoadState.PRIME_NUDGE -> return CartridgeSubScreen.FILL_CANNULA
-        LoadStatusResponse.LoadState.INVALID,
-        LoadStatusResponse.LoadState.UNKNOWN,
-        null -> {}
-    }
-    if (inFillTubingMode) {
-        return CartridgeSubScreen.FILL_TUBING
-    }
-    if (exitFillTubingState?.state == ExitFillTubingModeStateStreamResponse.ExitFillTubingModeState.NOT_COMPLETE) {
-        return CartridgeSubScreen.FILL_TUBING
-    }
-    if (inChangeCartridgeMode || enterChangeCartridgeState != null || detectingCartridgeState != null) {
-        return CartridgeSubScreen.CHANGE_CARTRIDGE
-    }
-    return null
-}
-
-private fun resolveLoadState(loadStatus: LoadStatusResponse?): LoadStatusResponse.LoadState? {
-    if (loadStatus == null) {
-        return null
-    }
-    val direct = loadStatus.getLoadState()
-    if (direct != null && direct != LoadStatusResponse.LoadState.UNKNOWN) {
-        return direct
-    }
-
-    val fromId = when (loadStatus.getLoadStateId()) {
-        0 -> LoadStatusResponse.LoadState.CHANGE_CARTRIDGE
-        1 -> LoadStatusResponse.LoadState.LOAD_CARTRIDGE
-        2 -> LoadStatusResponse.LoadState.PRIME_TUBING
-        3 -> LoadStatusResponse.LoadState.PRIME_CANNULA
-        4 -> LoadStatusResponse.LoadState.PRIME_NUDGE
-        5 -> LoadStatusResponse.LoadState.INVALID
-        6 -> LoadStatusResponse.LoadState.UNKNOWN
-        else -> null
-    }
-    if (fromId != null && fromId != LoadStatusResponse.LoadState.UNKNOWN) {
-        return fromId
-    }
-
-    val cargo = loadStatus.getCargo()
-    if (cargo != null && cargo.size >= 2) {
-        val cargoLoadStateId = cargo[1].toInt() and 0xFF
-        return when (cargoLoadStateId) {
-            0 -> LoadStatusResponse.LoadState.CHANGE_CARTRIDGE
-            1 -> LoadStatusResponse.LoadState.LOAD_CARTRIDGE
-            2 -> LoadStatusResponse.LoadState.PRIME_TUBING
-            3 -> LoadStatusResponse.LoadState.PRIME_CANNULA
-            4 -> LoadStatusResponse.LoadState.PRIME_NUDGE
-            5 -> LoadStatusResponse.LoadState.INVALID
-            else -> null
-        }
-    }
-    return null
+private fun IncompleteCartridgePhase.toCartridgeSubScreen(): CartridgeSubScreen = when (this) {
+    IncompleteCartridgePhase.CHANGE_CARTRIDGE -> CartridgeSubScreen.CHANGE_CARTRIDGE
+    IncompleteCartridgePhase.FILL_TUBING -> CartridgeSubScreen.FILL_TUBING
+    IncompleteCartridgePhase.FILL_CANNULA -> CartridgeSubScreen.FILL_CANNULA
 }
 
 private fun resolveCartridgeMenuAvailability(requiredSubScreen: CartridgeSubScreen?): CartridgeMenuAvailability {

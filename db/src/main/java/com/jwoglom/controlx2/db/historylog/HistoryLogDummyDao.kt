@@ -4,6 +4,17 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 
 class HistoryLogDummyDao(val data: MutableList<HistoryLogItem>) : HistoryLogDao {
+    override fun getMostRecentlyActivePumpSid(): Int? = data
+        .groupBy { it.pumpSid }
+        .maxWithOrNull(
+            compareBy<Map.Entry<Int, List<HistoryLogItem>>> { entry ->
+                entry.value.maxOfOrNull { it.pumpTimeSec } ?: Long.MIN_VALUE
+            }.thenBy { entry ->
+                entry.value.maxOfOrNull { it.seqId } ?: Long.MIN_VALUE
+            },
+        )
+        ?.key
+
     override fun getCount(pumpSid: Int): Flow<Long?> = flowOf(
         data.count { it.pumpSid == pumpSid }.toLong()
     )
@@ -55,6 +66,19 @@ class HistoryLogDummyDao(val data: MutableList<HistoryLogItem>) : HistoryLogDao 
     override fun getItemsForTypesSince(pumpSid: Int, typeIds: List<Int>, minPumpTimeSec: Long): Flow<List<HistoryLogItem>> = flowOf(
         data.filter { it.pumpSid == pumpSid && it.typeId in typeIds && it.pumpTimeSec >= minPumpTimeSec }
             .sortedBy { it.seqId }
+    )
+
+    override fun getItemsForTypesInTimeRange(
+        pumpSid: Int,
+        typeIds: List<Int>,
+        minPumpTimeSec: Long,
+        maxPumpTimeSec: Long,
+    ): Flow<List<HistoryLogItem>> = flowOf(
+        data.filter {
+            it.pumpSid == pumpSid &&
+                it.typeId in typeIds &&
+                it.pumpTimeSec in minPumpTimeSec..maxPumpTimeSec
+        }.sortedWith(compareByDescending<HistoryLogItem> { it.pumpTimeSec }.thenByDescending { it.seqId })
     )
 
     override fun getLatest(pumpSid: Int): Flow<HistoryLogItem?> = flowOf(

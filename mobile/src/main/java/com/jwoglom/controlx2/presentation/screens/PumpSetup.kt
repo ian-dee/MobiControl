@@ -6,17 +6,17 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import android.os.SystemClock
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +53,7 @@ import com.jwoglom.pumpx2.pump.PumpState
 import com.jwoglom.pumpx2.pump.messages.builders.PumpChallengeRequestBuilder
 import com.jwoglom.controlx2.LocalDataStore
 import com.jwoglom.controlx2.Prefs
+import com.jwoglom.controlx2.presentation.ProfileReadProgress
 import com.jwoglom.controlx2.presentation.components.DialogScreen
 import com.jwoglom.controlx2.presentation.components.HeaderLine
 import com.jwoglom.controlx2.presentation.components.Line
@@ -62,19 +64,40 @@ import com.jwoglom.controlx2.presentation.components.input.LongPairingCodeInput
 import com.jwoglom.controlx2.presentation.components.input.ShortPairingCodeInput
 import com.jwoglom.controlx2.presentation.navigation.Screen
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
+import com.jwoglom.controlx2.shared.enums.GlucoseUnit
+import com.jwoglom.controlx2.shared.presentation.intervalOf
 import com.jwoglom.controlx2.shared.util.determinePumpModel
+import com.jwoglom.controlx2.shared.util.phoneLocalTimeChangeRequest
 import com.jwoglom.controlx2.shared.util.triggerAppReload
+import com.jwoglom.controlx2.util.developerPreviewAvailable
 import com.jwoglom.pumpx2.pump.messages.models.KnownDeviceModel
 import com.jwoglom.pumpx2.pump.messages.models.PairingCodeType
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import com.jwoglom.controlx2.shared.MessagePaths
+import com.jwoglom.controlx2.shared.util.SendType
+import com.jwoglom.pumpx2.pump.messages.Message
+import com.jwoglom.pumpx2.pump.messages.builders.IDPManager
+import com.jwoglom.pumpx2.pump.messages.request.currentStatus.LoadStatusRequest
+import com.jwoglom.pumpx2.pump.messages.request.currentStatus.TimeSinceResetRequest
 import timber.log.Timber
+import java.time.Instant
+import java.time.ZoneId
+
+internal fun pumpOnboardingScreenTitle(stage: PumpSetupStage?): String = when (stage) {
+    PumpSetupStage.PUMPX2_SET_PUMP_TIME -> "Set Pump Time"
+    PumpSetupStage.PUMPX2_SYNC_PUMP_DATA -> "Sync Pump Data"
+    PumpSetupStage.PUMPX2_BACKGROUND_CONNECTION -> "Background Connection"
+    else -> "Pump Pairing"
+}
+
+internal fun finalOnboardingPumpDataSyncCommands(): List<Message> = listOf(LoadStatusRequest())
 
 @Composable
 fun PumpSetup(
     navController: NavHostController? = null,
     sendMessage: (String, ByteArray) -> Unit,
+    sendPumpCommands: (SendType, List<Message>) -> Unit,
 ) {
     val context = LocalContext.current
     val ds = LocalDataStore.current
@@ -82,6 +105,13 @@ fun PumpSetup(
     val clipboardManager: ClipboardManager = LocalClipboardManager.current
 
     val setupStage = ds.pumpSetupStage.observeAsState()
+    val pumpFinderPumps = ds.pumpFinderPumps.observeAsState(emptyList())
+    val selectedPumpFinderMac = ds.selectedPumpFinderMac.observeAsState()
+    val changeTimeDateResponseEvent = ds.changeTimeDateResponseEvent.observeAsState()
+    val timeSinceResetResponse = ds.timeSinceResetResponse.observeAsState()
+    val initialProfileReadError = ds.initialProfileReadError.observeAsState()
+    val clockTick = intervalOf(1)
+    val clockNow = remember(clockTick) { Instant.now() }
 
     var pairingCodeText by remember { mutableStateOf(when (PumpState.getPairingCode(context)) {
         null -> ""
@@ -91,12 +121,110 @@ fun PumpSetup(
     var showAdvancedPairingSettings by remember { mutableStateOf(false) }
     var pumpStateStatus by remember { mutableStateOf<String?>(null) }
     var pumpStateJson by remember { mutableStateOf(PumpState.exportState(context)) }
+    var timeSyncInFlight by remember { mutableStateOf(false) }
+    var timeSyncRequestBaseline by remember { mutableStateOf<Long?>(null) }
+    var timeSyncError by remember { mutableStateOf<String?>(null) }
+    var pumpTimeReadInFlight by remember { mutableStateOf(false) }
+    var pumpTimeObservedAt by remember { mutableStateOf<Instant?>(null) }
+    var reportedPumpTimeSeconds by remember { mutableStateOf<Long?>(null) }
+
+    val pumpTimeComparison = reportedPumpTimeSeconds?.let { reported ->
+        pumpTimeObservedAt?.let { observedAt ->
+            onboardingPumpTimeComparison(
+                reportedPumpLocalTandemEpochSeconds = reported,
+                observedAt = observedAt,
+                now = clockNow,
+                zoneId = ZoneId.systemDefault(),
+            )
+        }
+    }
+
+    LaunchedEffect(setupStage.value) {
+        if (setupStage.value == PumpSetupStage.PUMPX2_SET_PUMP_TIME) {
+            pumpTimeReadInFlight = true
+            pumpTimeObservedAt = null
+            reportedPumpTimeSeconds = null
+            // Discard any pre-onboarding snapshot so the comparison always uses a fresh reply.
+            ds.timeSinceResetResponse.value = null
+            sendPumpCommands(SendType.BUST_CACHE, listOf(TimeSinceResetRequest()))
+            delay(10_000L)
+            if (reportedPumpTimeSeconds == null) {
+                pumpTimeReadInFlight = false
+            }
+        }
+    }
+
+    LaunchedEffect(timeSinceResetResponse.value, setupStage.value) {
+        if (setupStage.value != PumpSetupStage.PUMPX2_SET_PUMP_TIME) return@LaunchedEffect
+        val response = timeSinceResetResponse.value ?: return@LaunchedEffect
+        reportedPumpTimeSeconds = response.currentTime
+        pumpTimeObservedAt = Instant.now()
+        pumpTimeReadInFlight = false
+    }
+
+    fun advanceToPumpDataSync() {
+        Prefs(context).setOnboardingTimeDecisionComplete(true)
+        ds.pumpSetupStage.value =
+            setupStage.value?.nextStage(PumpSetupStage.PUMPX2_SYNC_PUMP_DATA)
+    }
+
+    fun finishOnboarding() {
+        val prefs = Prefs(context)
+        prefs.setPumpSetupComplete(true)
+        prefs.setOnboardingTimeDecisionComplete(false)
+        // Retained as a migration marker for older installations; there is no longer a
+        // separate application-configuration screen.
+        prefs.setAppSetupComplete(true)
+        // Phone pump actions are part of the normal application surface. Individual writes
+        // remain protected by their workflow confirmation and authentication requirements.
+        prefs.setInsulinDeliveryActions(true)
+        prefs.setCheckForUpdates(false)
+        sendMessage(MessagePaths.TO_SERVER_APPLY_RUNTIME_PREFS, "".toByteArray())
+        // Normalize the shared connection stage before opening the dashboard. The service is
+        // already connected, so requesting service status here would cause a redundant profile read.
+        ds.pumpSetupStage.value = PumpSetupStage.PUMPX2_PUMP_CONNECTED
+        navController?.navigate(Screen.Landing.route) {
+            popUpTo(Screen.PumpSetup.route) { inclusive = true }
+        }
+    }
+
+    LaunchedEffect(changeTimeDateResponseEvent.value, timeSyncRequestBaseline) {
+        val baseline = timeSyncRequestBaseline ?: return@LaunchedEffect
+        val responseEvent = changeTimeDateResponseEvent.value ?: return@LaunchedEffect
+        if (responseEvent.sequence <= baseline) return@LaunchedEffect
+
+        timeSyncInFlight = false
+        timeSyncRequestBaseline = null
+        if (responseEvent.message.isStatusOK) {
+            advanceToPumpDataSync()
+        } else {
+            timeSyncError = "The pump did not accept the phone time. Try again or skip for now."
+        }
+    }
+
+    LaunchedEffect(timeSyncRequestBaseline) {
+        val baseline = timeSyncRequestBaseline ?: return@LaunchedEffect
+        delay(10_000L)
+        if (timeSyncRequestBaseline == baseline) {
+            timeSyncInFlight = false
+            timeSyncRequestBaseline = null
+            timeSyncError = "The pump did not confirm the time change. Try again or skip for now."
+        }
+    }
 
     fun resetPumpFinder(context: Context) {
         Prefs(context).setPumpSetupComplete(false)
+        Prefs(context).setOnboardingTimeDecisionComplete(false)
+        Prefs(context).setInsulinDeliveryActions(false)
         Prefs(context).setPumpFinderPumpMac("")
         Prefs(context).setPumpFinderPairingCodeType("")
         Prefs(context).setPumpFinderServiceEnabled(true)
+        ds.pumpFinderPumps.value = emptyList()
+        ds.selectedPumpFinderMac.value = null
+        ds.setupDeviceName.value = null
+        ds.pumpReadyState.value = null
+        ds.setupPairingCodeType.value = null
+        ds.initialProfileReadError.value = null
         PumpState.setPairingCode(context, "")
         PumpState.setJpakeDerivedSecret(context, "")
         PumpState.setJpakeServerNonce(context, "")
@@ -112,15 +240,22 @@ fun PumpSetup(
         }
     }
     DialogScreen(
-        "Pump Setup",
+        pumpOnboardingScreenTitle(setupStage.value),
         actionContent = {
-            IconButton(onClick = {
-                showAdvancedPairingSettings = true
-            }) {
-                Icon(
-                    Icons.Filled.Settings,
-                    contentDescription = null,
+            if (setupStage.value !in setOf(
+                    PumpSetupStage.PUMPX2_SET_PUMP_TIME,
+                    PumpSetupStage.PUMPX2_SYNC_PUMP_DATA,
+                    PumpSetupStage.PUMPX2_BACKGROUND_CONNECTION,
                 )
+            ) {
+                IconButton(onClick = {
+                    showAdvancedPairingSettings = true
+                }) {
+                    Icon(
+                        Icons.Filled.Settings,
+                        contentDescription = null,
+                    )
+                }
             }
         },
         buttonContent = {
@@ -139,6 +274,7 @@ fun PumpSetup(
                         PumpSetupStage.PUMP_FINDER_SEARCHING_FOR_PUMPS,
                         PumpSetupStage.PUMP_FINDER_MOBI_PICK_UP_AND_TAP,
                         PumpSetupStage.PUMP_FINDER_MOBI_PLACE_ON_CHARGING_PAD,
+                        PumpSetupStage.PUMP_FINDER_MOBI_SELECT_PUMP,
                         PumpSetupStage.PUMP_FINDER_MOBI_ENTER_PAIRING_CODE,
                         PumpSetupStage.WAITING_PUMPX2_INIT,
                         PumpSetupStage.PUMPX2_SEARCHING_FOR_PUMP,
@@ -147,6 +283,7 @@ fun PumpSetup(
                         PumpSetupStage.PUMPX2_INVALID_PAIRING_CODE,
                         PumpSetupStage.PUMPX2_PUMP_MODEL_METADATA,
                         PumpSetupStage.PUMPX2_SENDING_PAIRING_CODE,
+                        PumpSetupStage.PUMPX2_READING_PUMP_PROFILES,
                         PumpSetupStage.WAITING_PUMP_FINDER_CLEANUP
                     )
                     Button(
@@ -162,6 +299,9 @@ fun PumpSetup(
                                     if (ds.pumpSetupStage.value in resettableStages) {
                                         resetPumpFinder(context)
                                     } else {
+                                        if (ds.pumpSetupStage.value == PumpSetupStage.PUMPX2_SYNC_PUMP_DATA) {
+                                            Prefs(context).setOnboardingTimeDecisionComplete(false)
+                                        }
                                         ds.pumpSetupStage.value = setupStage.value?.previousStage()
                                     }
                                 }
@@ -189,10 +329,27 @@ fun PumpSetup(
                 PumpSetupStage.PUMP_FINDER_TSLIM_ENTER_PAIRING_CODE,
                 PumpSetupStage.PUMP_FINDER_MOBI_ENTER_PAIRING_CODE,
                 PumpSetupStage.PUMPX2_WAITING_FOR_PAIRING_CODE -> {
+                    val freshSelectedMobi = pumpFinderPumps.value.firstOrNull {
+                        it.address == selectedPumpFinderMac.value
+                    }?.isFreshMobiPairingMode(SystemClock.elapsedRealtime()) == true
                     Button(
+                        enabled = setupStage.value != PumpSetupStage.PUMP_FINDER_MOBI_ENTER_PAIRING_CODE ||
+                            freshSelectedMobi,
                         onClick = {
+                            if (setupStage.value == PumpSetupStage.PUMP_FINDER_MOBI_ENTER_PAIRING_CODE &&
+                                !freshSelectedMobi
+                            ) {
+                                ds.setupPairingCodeType.value = null
+                                ds.selectedPumpFinderMac.value = null
+                                ds.setupDeviceName.value = null
+                                ds.pumpReadyState.value = null
+                                Prefs(context).setPumpFinderPumpMac("")
+                                ds.pumpSetupStage.value =
+                                    PumpSetupStage.PUMP_FINDER_MOBI_PLACE_ON_CHARGING_PAD
+                                return@Button
+                            }
                             try {
-                                Timber.i("enterPairingCode: $pairingCodeText ${ds.setupPairingCodeType.value} (${PumpState.getPairingCode(context)})")
+                                Timber.i("enterPairingCode: type=${ds.setupPairingCodeType.value} code=<redacted>")
                                 val code = PumpChallengeRequestBuilder.processPairingCode(pairingCodeText, ds.setupPairingCodeType.value)
                                 if (setupStage.value != PumpSetupStage.PUMPX2_WAITING_FOR_PAIRING_CODE) {
                                     ds.pumpSetupStage.value = setupStage.value!!.nextStage(PumpSetupStage.WAITING_PUMP_FINDER_CLEANUP)
@@ -216,14 +373,80 @@ fun PumpSetup(
                         Text("Retry")
                     }
                 }
+                PumpSetupStage.PUMPX2_READING_PUMP_PROFILES -> {
+                    if (initialProfileReadError.value != null) {
+                        Button(
+                            onClick = {
+                                ds.idpManager.value = IDPManager()
+                                ds.profileReadProgress.value = ProfileReadProgress()
+                                ds.initialProfileReadError.value = null
+                                sendMessage(
+                                    MessagePaths.TO_SERVER_RETRY_INITIAL_PROFILE_READ,
+                                    byteArrayOf(),
+                                )
+                            },
+                        ) {
+                            Text("Retry Profile Load")
+                        }
+                    }
+                }
                 PumpSetupStage.PUMPX2_PUMP_CONNECTED -> {
                     Button(
                         onClick = {
-                            navController?.navigate(Screen.AppSetup.route)
-                            Prefs(context).setPumpSetupComplete(true)
+                            ds.pumpSetupStage.value =
+                                setupStage.value?.nextStage(PumpSetupStage.PUMPX2_SET_PUMP_TIME)
                         }
                     ) {
                         Text("Next")
+                    }
+                }
+                PumpSetupStage.PUMPX2_SET_PUMP_TIME -> {
+                    Button(
+                        onClick = {
+                            timeSyncError = null
+                            advanceToPumpDataSync()
+                        },
+                        enabled = !timeSyncInFlight,
+                    ) {
+                        Text(if (pumpTimeComparison?.withinTolerance == true) "Continue" else "Skip")
+                    }
+                    if (pumpTimeComparison?.shouldOfferSync == true) {
+                        Button(
+                            onClick = {
+                                timeSyncError = null
+                                timeSyncInFlight = true
+                                timeSyncRequestBaseline = ds.latestPumpMessageSequence.value ?: 0L
+                                sendPumpCommands(
+                                    SendType.STANDARD,
+                                    listOf(phoneLocalTimeChangeRequest()),
+                                )
+                            },
+                            enabled = !timeSyncInFlight,
+                        ) {
+                            Text("Sync to Phone")
+                        }
+                    }
+                }
+                PumpSetupStage.PUMPX2_SYNC_PUMP_DATA -> {
+                    Button(
+                        onClick = {
+                            // Match the official Mobi data transition: force a fresh pump
+                            // load-state request. History catch-up remains independent.
+                            sendPumpCommands(
+                                SendType.BUST_CACHE,
+                                finalOnboardingPumpDataSyncCommands(),
+                            )
+                            ds.pumpSetupStage.value = setupStage.value?.nextStage(
+                                PumpSetupStage.PUMPX2_BACKGROUND_CONNECTION,
+                            )
+                        },
+                    ) {
+                        Text("Sync Pump Data")
+                    }
+                }
+                PumpSetupStage.PUMPX2_BACKGROUND_CONNECTION -> {
+                    Button(onClick = { finishOnboarding() }) {
+                        Text("Finish Setup")
                     }
                 }
                 else -> {
@@ -242,6 +465,47 @@ fun PumpSetup(
     ) {
         item {
             ServiceDisabledMessage(sendMessage = sendMessage)
+        }
+        if (developerPreviewAvailable() && setupStage.value !in setOf(
+                PumpSetupStage.PUMPX2_SET_PUMP_TIME,
+                PumpSetupStage.PUMPX2_SYNC_PUMP_DATA,
+                PumpSetupStage.PUMPX2_BACKGROUND_CONNECTION,
+            )
+        ) {
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = {
+                            val prefs = Prefs(context)
+                            prefs.setDeveloperPreviewEnabled(true)
+                            prefs.setPumpSetupComplete(true)
+                            prefs.setAppSetupComplete(true)
+                            prefs.setServiceEnabled(false)
+                            prefs.setPumpFinderServiceEnabled(false)
+                            prefs.setInsulinDeliveryActions(false)
+                            prefs.setPumpFinderPumpMac("")
+                            prefs.setPumpFinderPairingCodeType("")
+                            prefs.setCurrentPumpSid(-1)
+                            prefs.setGlucoseUnit(GlucoseUnit.MGDL)
+                            ds.glucoseUnitPreference.value = GlucoseUnit.MGDL
+                            PumpState.resetState(context)
+                            // Restart after committing the preview preference.
+                            // This releases any already-running pump service;
+                            // the fresh process will not start it again.
+                            triggerAppReload(context)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Enter Developer Preview")
+                    }
+                    Line("Emulator-only UI preview. Pump communication and insulin delivery actions are disabled.")
+                }
+            }
         }
         item {
 
@@ -280,44 +544,49 @@ fun PumpSetup(
                             }
 
                             item {
-                                LazyRow {
-                                    item {
-                                        Button(onClick = {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
                                             clipboardManager.getText()?.text?.let {
                                                 pumpStateJson = it
                                             }
-                                        }) {
-                                            Text("Read from clipboard")
-                                        }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("Read from clipboard")
                                     }
-                                    item {
-                                        Spacer(Modifier.width(16.dp))
-                                    }
-                                    item {
-                                        Button(onClick = {
-                                            try {
-                                                PumpState.importState(context, pumpStateJson)
-                                                pumpStateStatus =
-                                                    "Success, application will reload with new state momentarily..."
-                                                coroutineScope.launch {
-                                                    delay(1000)
-                                                    triggerAppReload(context)
-                                                }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Button(
+                                            onClick = {
+                                                try {
+                                                    PumpState.importState(context, pumpStateJson)
+                                                    pumpStateStatus =
+                                                        "Success, application will reload with new state momentarily..."
+                                                    coroutineScope.launch {
+                                                        delay(1000)
+                                                        triggerAppReload(context)
+                                                    }
 
-                                            } catch (e: Exception) {
-                                                pumpStateStatus = "Error importing state: ${e}"
-                                            }
-                                        }) {
+                                                } catch (e: Exception) {
+                                                    pumpStateStatus = "Error importing state: ${e}"
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
                                             Text("Apply")
                                         }
-                                    }
-                                    item {
-                                        Spacer(Modifier.width(16.dp))
-                                    }
-                                    item {
-                                        Button(onClick = {
-                                            showAdvancedPairingSettings = false
-                                        }) {
+                                        Button(
+                                            onClick = {
+                                                showAdvancedPairingSettings = false
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        ) {
                                             Text("Cancel")
                                         }
                                     }
@@ -337,6 +606,9 @@ fun PumpSetup(
             val setupPairingCodeType = ds.setupPairingCodeType.observeAsState()
             PumpSetupStageDescription(
                 initialSetup = true,
+                onboardingPumpTimeComparison = pumpTimeComparison,
+                onboardingClockNow = clockNow,
+                onboardingPumpTimeLoading = pumpTimeReadInFlight,
                 pairingCodeStage = {
                     if (setupStage.value == PumpSetupStage.PUMPX2_INVALID_PAIRING_CODE) {
                         LaunchedEffect(Unit) {
@@ -402,7 +674,7 @@ fun PumpSetup(
                                 value = pairingCodeText,
                                 onValueChange = {
                                     pairingCodeText = it
-                                    Timber.i("newPairingCode(LONG_16CHAR): $it")
+                                    Timber.d("newPairingCode(LONG_16CHAR): length=${it.length}")
                                 }
                             )
                         }
@@ -411,7 +683,7 @@ fun PumpSetup(
                                 value = pairingCodeText,
                                 onValueChange = {
                                     pairingCodeText = it
-                                    Timber.i("newPairingCode(SHORT_6CHAR): $it")
+                                    Timber.d("newPairingCode(SHORT_6CHAR): length=${it.length}")
                                 },
                                 onClearSavedPin = {
                                     pairingCodeText = ""
@@ -423,6 +695,16 @@ fun PumpSetup(
                     }
                 }
             )
+            if (setupStage.value == PumpSetupStage.PUMPX2_SET_PUMP_TIME) {
+                if (timeSyncInFlight) {
+                    Spacer(Modifier.height(16.dp))
+                    Line("Waiting for the pump to confirm the time change...")
+                }
+                timeSyncError?.let {
+                    Spacer(Modifier.height(16.dp))
+                    Text(it, color = Color.Red)
+                }
+            }
         }
     }
 }
@@ -436,9 +718,10 @@ enum class PumpSetupStage(val step: Int, val description: String) {
     PUMP_FINDER_TSLIM_CHOOSE_PAIRING_CODE_TYPE(3, "t:slim X2: choose pairing code type"),
     PUMP_FINDER_TSLIM_ENTER_PAIRING_CODE(4, "t:slim X2: enter pairing code"),
 
-    PUMP_FINDER_MOBI_PLACE_ON_CHARGING_PAD(3, "Mobi: place pump on charging pad"),
-    PUMP_FINDER_MOBI_PICK_UP_AND_TAP(4, "Mobi: pick up and double-tap"),
-    PUMP_FINDER_MOBI_ENTER_PAIRING_CODE(5, "Mobi: enter pairing PIN"),
+    PUMP_FINDER_MOBI_PLACE_ON_CHARGING_PAD(1, "Mobi: place pump on charging pad"),
+    PUMP_FINDER_MOBI_PICK_UP_AND_TAP(2, "Mobi: enable pairing mode"),
+    PUMP_FINDER_MOBI_SELECT_PUMP(3, "Mobi: select your pump"),
+    PUMP_FINDER_MOBI_ENTER_PAIRING_CODE(4, "Mobi: enter pairing code"),
     WAITING_PUMP_FINDER_CLEANUP(5, "Establishing connection: Waiting for PumpFinder to clean up"),
     WAITING_PUMPX2_INIT(5, "Establishing connection: Waiting for PumpX2 init"),
     PUMPX2_SEARCHING_FOR_PUMP(5, "Establishing connection: Searching for pump"),
@@ -447,9 +730,13 @@ enum class PumpSetupStage(val step: Int, val description: String) {
     PUMPX2_PUMP_MODEL_METADATA(5, "Establishing connection: Initial pump metadata received"),
     PUMPX2_INITIAL_PUMP_CONNECTION(6, "Establishing connection: Initial connection established"),
     PUMPX2_WAITING_FOR_PAIRING_CODE(6, "Establishing connection: Waiting to send pairing code"),
-    PUMPX2_SENDING_PAIRING_CODE(6, "Establishing connection: Sending pairing code"),
+    PUMPX2_SENDING_PAIRING_CODE(7, "Authenticating pump"),
     PUMPX2_INVALID_PAIRING_CODE(4, "Invalid pairing code"),
-    PUMPX2_PUMP_CONNECTED(7, "Pairing code accepted"),
+    PUMPX2_READING_PUMP_PROFILES(8, "Pump pairing complete"),
+    PUMPX2_PUMP_CONNECTED(8, "Pump pairing complete"),
+    PUMPX2_SET_PUMP_TIME(8, "Optional pump time synchronization"),
+    PUMPX2_SYNC_PUMP_DATA(8, "Sync pump data"),
+    PUMPX2_BACKGROUND_CONNECTION(8, "Background connection setup"),
     ;
 
     fun nextStage(stage: PumpSetupStage): PumpSetupStage {
@@ -480,9 +767,10 @@ enum class PumpSetupStage(val step: Int, val description: String) {
     fun previousStage(): PumpSetupStage {
         return when (this) {
             PUMP_FINDER_TSLIM_ENTER_PAIRING_CODE -> PUMP_FINDER_TSLIM_CHOOSE_PAIRING_CODE_TYPE
-            PUMP_FINDER_MOBI_PLACE_ON_CHARGING_PAD -> PUMP_FINDER_SELECT_PUMP
-            PUMP_FINDER_MOBI_PICK_UP_AND_TAP -> PUMP_FINDER_MOBI_PLACE_ON_CHARGING_PAD
-            PUMP_FINDER_MOBI_ENTER_PAIRING_CODE -> PUMP_FINDER_MOBI_PLACE_ON_CHARGING_PAD
+            PUMP_FINDER_MOBI_PLACE_ON_CHARGING_PAD -> PUMP_FINDER_SEARCHING_FOR_PUMPS
+            PUMP_FINDER_MOBI_PICK_UP_AND_TAP -> PUMP_FINDER_SEARCHING_FOR_PUMPS
+            PUMP_FINDER_MOBI_SELECT_PUMP -> PUMP_FINDER_MOBI_PICK_UP_AND_TAP
+            PUMP_FINDER_MOBI_ENTER_PAIRING_CODE -> PUMP_FINDER_MOBI_SELECT_PUMP
             else -> values().getOrElse(ordinal - 1) { this }
         }
     }
@@ -499,6 +787,7 @@ internal fun PumpSetupDefaultPreview() {
             LocalDataStore.current.pumpSetupStage.value = PumpSetupStage.PUMPX2_WAITING_FOR_PAIRING_CODE
             PumpSetup(
                 sendMessage = {_, _ -> },
+                sendPumpCommands = {_, _ -> },
             )
         }
     }

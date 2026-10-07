@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -28,12 +29,15 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jwoglom.controlx2.LocalDataStore
+import com.jwoglom.controlx2.presentation.screens.sections.basalRateToPumpValue
+import com.jwoglom.controlx2.presentation.screens.sections.formatProfileBasal
+import com.jwoglom.controlx2.presentation.screens.sections.formatProfileRatio
+import com.jwoglom.controlx2.presentation.screens.sections.profileRatioToPumpValue
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
 import com.jwoglom.controlx2.shared.enums.GlucoseUnit
 import com.jwoglom.controlx2.shared.util.GlucoseConverter
 import kotlin.math.roundToInt
 import com.jwoglom.pumpx2.pump.messages.builders.IDPManager
-import com.jwoglom.pumpx2.pump.messages.models.InsulinUnit
 import com.jwoglom.pumpx2.pump.messages.models.MinsTime
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.IDPSegmentResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.IDPSettingsResponse
@@ -45,10 +49,14 @@ fun EditSegmentDialog(
     segment: IDPSegmentResponse,
     segmentIndex: Int,
     onDismiss: () -> Unit,
-    onConfirm: (MinsTime, Float, Long, Int, Int) -> Unit
+    existingStartMinutes: Set<Int> = emptySet(),
+    onDelete: (() -> Unit)? = null,
+    saveAsDraftCopy: Boolean = false,
+    onConfirm: (MinsTime, Int, Long, Int, Int) -> Unit
 ) {
     val dataStore = LocalDataStore.current
     val glucoseUnit by dataStore.glucoseUnitPreference.observeAsState(GlucoseUnit.MGDL)
+    val controlIqEnabled by dataStore.controlIQEnabled.observeAsState(false)
 
     val totalMinutes = segment.profileStartTime
     val initialHour = totalMinutes / 60
@@ -58,13 +66,21 @@ fun EditSegmentDialog(
         initialMinute = initialMinute,
         is24Hour = false
     )
-    var basalRate by remember { mutableStateOf(InsulinUnit.from1000To1(segment.profileBasalRate.toLong()).toString()) }
-    var carbRatio by remember { mutableStateOf(segment.profileCarbRatio.toString()) }
-    var targetBG by remember { mutableStateOf(
+    val initialBasalRate = remember(segment) { formatProfileBasal(segment.profileBasalRate) }
+    val initialCarbRatio = remember(segment) { formatProfileRatio(segment.profileCarbRatio) }
+    val initialTargetBg = remember(segment, glucoseUnit) {
         GlucoseConverter.format(segment.profileTargetBG, glucoseUnit)
-    ) }
-    var isf by remember { mutableStateOf(
+    }
+    val initialIsf = remember(segment, glucoseUnit) {
         GlucoseConverter.format(segment.profileISF, glucoseUnit)
+    }
+    var basalRate by remember(segment) { mutableStateOf(initialBasalRate) }
+    var carbRatio by remember(segment) { mutableStateOf(initialCarbRatio) }
+    var targetBG by remember(segment, glucoseUnit) { mutableStateOf(
+        initialTargetBg
+    ) }
+    var isf by remember(segment, glucoseUnit) { mutableStateOf(
+        initialIsf
     ) }
     var errorMessage by remember { mutableStateOf("") }
 
@@ -83,6 +99,16 @@ fun EditSegmentDialog(
                 item {
                     Text("Editing segment ${segmentIndex} in ${profile.idpSettingsResponse.name} (#${profile.idpId})", fontSize = 14.sp)
                 }
+                if (saveAsDraftCopy) {
+                    item {
+                        Text(
+                            "Pump connection was lost. Your entries remain here. Saving will " +
+                                "create a named local draft copy and will not change the original profile.",
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
                 item {
                     Text(
                         "Start Time",
@@ -91,10 +117,14 @@ fun EditSegmentDialog(
                     )
                 }
                 item {
-                    TimePicker(
-                        state = timePickerState,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (segmentIndex == 0) {
+                        Text("12:00 AM (required for the first segment)")
+                    } else {
+                        TimePicker(
+                            state = timePickerState,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
                 item {
                     OutlinedTextField(
@@ -113,7 +143,7 @@ fun EditSegmentDialog(
                         label = { Text("Carb Ratio (g/u)") },
                         supportingText = { Text("Example: 10 = 1:10 ratio") },
                         placeholder = { Text("e.g., 10g") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -126,6 +156,10 @@ fun EditSegmentDialog(
                             GlucoseUnit.MGDL -> "e.g., 110"
                             GlucoseUnit.MMOL -> "e.g., 6.1"
                         }) },
+                        enabled = !controlIqEnabled,
+                        supportingText = if (controlIqEnabled) {
+                            { Text("Fixed at 110 mg/dL while Control-IQ is enabled") }
+                        } else null,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -158,6 +192,16 @@ fun EditSegmentDialog(
                         )
                     }
                 }
+                if (onDelete != null && segmentIndex != 0) {
+                    item {
+                        TextButton(onClick = onDelete, enabled = !saveAsDraftCopy) {
+                            Text(
+                                if (saveAsDraftCopy) "Reconnect to Delete Segment" else "Delete Segment",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -167,53 +211,72 @@ fun EditSegmentDialog(
                         val hours = timePickerState.hour
                         val minutes = timePickerState.minute
                         val newStartTime = MinsTime(hours, minutes)
-                        val basalRateFloat = basalRate.toFloatOrNull() ?: 0f
-                        val carbRatioLong = carbRatio.toLongOrNull() ?: 0L
+                        val newStartMinutes = hours * 60 + minutes
+                        val basalRateMilliunits = basalRateToPumpValue(basalRate)
+                        val carbRatioMilliunits = profileRatioToPumpValue(carbRatio)
                         // Convert glucose values from display unit to mg/dL for pump
                         val targetBGMgdl = when (glucoseUnit) {
-                            GlucoseUnit.MGDL -> targetBG.toIntOrNull() ?: 0
-                            GlucoseUnit.MMOL -> GlucoseConverter.convert(
-                                targetBG.toDoubleOrNull() ?: 0.0,
-                                GlucoseUnit.MMOL, GlucoseUnit.MGDL
-                            ).roundToInt()
+                            GlucoseUnit.MGDL -> targetBG.toIntOrNull()
+                            GlucoseUnit.MMOL -> targetBG.toDoubleOrNull()?.let {
+                                GlucoseConverter.convert(it, GlucoseUnit.MMOL, GlucoseUnit.MGDL).roundToInt()
+                            }
                         }
                         val isfMgdl = when (glucoseUnit) {
-                            GlucoseUnit.MGDL -> isf.toIntOrNull() ?: 0
-                            GlucoseUnit.MMOL -> GlucoseConverter.convert(
-                                isf.toDoubleOrNull() ?: 0.0,
-                                GlucoseUnit.MMOL, GlucoseUnit.MGDL
-                            ).roundToInt()
+                            GlucoseUnit.MGDL -> isf.toIntOrNull()
+                            GlucoseUnit.MMOL -> isf.toDoubleOrNull()?.let {
+                                GlucoseConverter.convert(it, GlucoseUnit.MMOL, GlucoseUnit.MGDL).roundToInt()
+                            }
                         }
 
                         if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
                             errorMessage = "Invalid time. Hours must be 0-23, minutes must be 0-59."
                             return@TextButton
                         }
-                        if (basalRateFloat <= 0) {
-                            errorMessage = "Basal rate must be greater than 0"
+                        if (newStartMinutes != totalMinutes && newStartMinutes in existingStartMinutes) {
+                            errorMessage = "A segment already starts at this time."
                             return@TextButton
                         }
-                        if (carbRatioLong <= 0) {
-                            errorMessage = "Carb ratio must be greater than 0"
+                        if (segmentIndex == 0 && newStartMinutes != 0) {
+                            errorMessage = "The first segment must start at 12:00 AM."
                             return@TextButton
                         }
-                        if (targetBGMgdl <= 0) {
+                        if (basalRateMilliunits == null) {
+                            errorMessage = "Enter a basal rate greater than 0 using no more than three decimal places."
+                            return@TextButton
+                        }
+                        if (carbRatioMilliunits == null) {
+                            errorMessage = "Enter a carb ratio greater than 0 using no more than three decimal places."
+                            return@TextButton
+                        }
+                        if (targetBGMgdl == null || targetBGMgdl <= 0) {
                             errorMessage = "Target BG must be greater than 0"
                             return@TextButton
                         }
-                        if (isfMgdl <= 0) {
+                        if (isfMgdl == null || isfMgdl <= 0) {
                             errorMessage = "ISF must be greater than 0"
                             return@TextButton
                         }
 
-                        onConfirm(newStartTime, basalRateFloat, carbRatioLong, targetBGMgdl, isfMgdl)
+                        onConfirm(
+                            newStartTime,
+                            basalRateMilliunits,
+                            carbRatioMilliunits,
+                            targetBGMgdl,
+                            isfMgdl,
+                        )
                     } catch (e: Exception) {
                         errorMessage = "Error: ${e.message}"
                         Timber.e(e, "Error updating segment")
                     }
-                }
+                },
+                enabled = timePickerState.hour != initialHour ||
+                    timePickerState.minute != initialMinute ||
+                    basalRate != initialBasalRate ||
+                    carbRatio != initialCarbRatio ||
+                    targetBG != initialTargetBg ||
+                    isf != initialIsf,
             ) {
-                Text("Update Segment")
+                Text(if (saveAsDraftCopy) "Save Draft Copy" else "Update Segment")
             }
         },
         dismissButton = {

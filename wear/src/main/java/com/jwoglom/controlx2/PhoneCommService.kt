@@ -21,6 +21,7 @@ import com.jwoglom.controlx2.clientcomm.ClientConnectionState
 import com.jwoglom.controlx2.clientcomm.ClientMessageHandler
 import com.jwoglom.controlx2.clientcomm.ClientSideEffects
 import com.jwoglom.controlx2.messaging.WearMessageBus
+import com.jwoglom.controlx2.shared.MessagePaths
 import com.jwoglom.controlx2.shared.messaging.MessageBus
 import com.jwoglom.controlx2.shared.messaging.MessageListener
 import com.jwoglom.controlx2.shared.enums.DeviceRole
@@ -129,7 +130,8 @@ class PhoneCommService : Service() {
     }
 
     private fun createNotification(): Notification {
-        val notificationChannelId = "ControlX2 Background Notification"
+        val appName = getString(R.string.app_name)
+        val notificationChannelId = "$packageName Background Notification"
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager;
         val channel = NotificationChannel(
@@ -156,10 +158,10 @@ class PhoneCommService : Service() {
             notificationChannelId
         )
 
-        val title = "ControlX2 is running: $connectionState"
+        val title = "$appName is running: $connectionState"
         return builder
             .setContentTitle(title)
-            .setContentText("This notification can be hidden: open Settings > Apps > Notifications > All > ControlX2 and turn Endless Service Notifications off")
+            .setContentText("This notification can be hidden: open Settings > Apps > Notifications > All > $appName and turn Endless Service Notifications off")
             .setContentIntent(pendingIntent)
             .setSmallIcon(IconCompat.createWithResource(this, R.drawable.pump))
             .setTicker(title)
@@ -191,7 +193,7 @@ class PhoneCommService : Service() {
             )
             val notif = NotificationCompat.Builder(this)
                 .setSmallIcon(R.drawable.comm_error)
-                .setContentTitle("ControlX2 disconnected")
+                .setContentTitle("${getString(R.string.app_name)} disconnected")
                 .setContentText(reason)
                 .setChannelId("disconnectedChannel")
                 .build()
@@ -207,7 +209,7 @@ class PhoneCommService : Service() {
     }
 
     private fun sendMessage(path: String, message: ByteArray) {
-        Timber.i("wear sendMessage: $path ${String(message)}")
+        Timber.i("wear sendMessage: $path ${MessagePaths.payloadForLog(path, message)}")
         messageBus.sendMessage(path, message)
     }
 

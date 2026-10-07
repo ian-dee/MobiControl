@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="36dp"
+    android:viewportWidth="48" android:viewportHeight="72">
+    <!-- Original launcher silhouette, translated without changing its 44:66 proportions.
+         The tight 2:3 viewport retains stroke clearance; ImageViews scale both axes equally. -->
+    <group android:translateX="-30" android:translateY="-18">
+        <path android:fillColor="#FF101820"
+            android:pathData="M39,21 L69,21 Q76,21 76,29 L76,80 Q76,87 69,87 L39,87 Q32,87 32,80 L32,29 Q32,21 39,21 Z" />
+        <path android:fillColor="#FFF4F7F9"
+            android:pathData="M55,21 L69,21 Q76,21 76,29 L76,49 L55,49 Z" />
+        <path android:fillColor="#FF6F7479"
+            android:pathData="M58,25 L62,25 L62,46 L58,46 Z" />
+        <path android:fillColor="@android:color/transparent"
+            android:pathData="M66,28 L72,28 M66,33.5 L72,33.5 M66,39 L72,39 M66,44.5 L72,44.5"
+            android:strokeColor="#FF101820" android:strokeLineCap="round" android:strokeWidth="1.8" />
+        <path android:fillColor="@android:color/transparent"
+            android:pathData="M39,21 L69,21 Q76,21 76,29 L76,80 Q76,87 69,87 L39,87 Q32,87 32,80 L32,29 Q32,21 39,21 Z"
+            android:strokeColor="#FF49B8F4" android:strokeLineJoin="round" android:strokeWidth="3.5" />
+    </group>
+</vector>

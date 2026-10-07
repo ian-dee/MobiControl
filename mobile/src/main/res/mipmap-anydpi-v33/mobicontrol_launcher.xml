@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/mobicontrol_icon_background" />
+    <foreground android:drawable="@drawable/mobicontrol_launcher_foreground" />
+    <monochrome android:drawable="@drawable/mobicontrol_launcher_monochrome" />
+</adaptive-icon>

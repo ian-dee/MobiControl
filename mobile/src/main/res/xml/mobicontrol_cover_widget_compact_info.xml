@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/mobicontrol_cover_widget_compact_description"
+    android:initialKeyguardLayout="@layout/mobicontrol_cover_widget_compact"
+    android:initialLayout="@layout/mobicontrol_cover_widget_compact"
+    android:minHeight="133dp"
+    android:minResizeHeight="133dp"
+    android:minResizeWidth="150dp"
+    android:minWidth="150dp"
+    android:previewLayout="@layout/mobicontrol_cover_widget_compact"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="2"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="keyguard" />

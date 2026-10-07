@@ -36,9 +36,10 @@ import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.dialog.Alert
 import com.google.android.horologist.compose.navscaffold.scrollableColumn
 import com.jwoglom.controlx2.LocalDataStore
+import com.jwoglom.controlx2.shared.pumpNotificationStatusRequests
+import com.jwoglom.controlx2.shared.pumpReminderPresentation
 import com.jwoglom.controlx2.shared.util.SendType
 import com.jwoglom.pumpx2.pump.messages.Message
-import com.jwoglom.pumpx2.pump.messages.models.NotificationBundle
 import com.jwoglom.pumpx2.pump.messages.request.control.DismissNotificationRequest
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlarmStatusResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlertStatusResponse
@@ -61,7 +62,7 @@ import kotlinx.coroutines.launch
  * MessageReceived` populates whenever a `NotificationBundle.isNotification
  * Response(message)` arm fires — same shape mobile uses (mobile
  * `MainActivity.kt:820-825`). On entry, fires the full
- * `NotificationBundle.allRequests()` set with BUST_CACHE so the list
+ * canonical pump-notification request set with BUST_CACHE so the list
  * reflects current pump state instead of a stale cache.
  *
  * Dismissal mirrors mobile `NotificationItem.dismissNotification()` —
@@ -86,7 +87,7 @@ fun WatchNotificationsScreen(
     fun refreshAll() {
         sendPumpCommands(
             SendType.BUST_CACHE,
-            NotificationBundle.allRequests().toList(),
+            pumpNotificationStatusRequests(),
         )
     }
 
@@ -223,7 +224,7 @@ private fun DismissConfirmAlert(
 private fun notificationLabel(notification: Any): String = when (notification) {
     is AlertStatusResponse.AlertResponseType -> "Alert: ${notification.name}"
     is AlarmStatusResponse.AlarmResponseType -> "Alarm: ${notification.name}"
-    is ReminderStatusResponse.ReminderType -> "Reminder: ${notification.name}"
+    is ReminderStatusResponse.ReminderType -> pumpReminderPresentation(notification).headline
     is CGMAlertStatusResponse.CGMAlert -> "CGM: ${notification.name}"
     is HighestAamResponse -> "Malfunction: ${notification.errorString ?: ""}"
     else -> notification.toString()

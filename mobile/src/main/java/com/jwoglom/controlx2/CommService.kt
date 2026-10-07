@@ -35,27 +35,55 @@ import com.jwoglom.controlx2.pump.PumpHistoryLogSyncWorker
 import com.jwoglom.controlx2.pump.PumpSession
 import com.jwoglom.controlx2.shared.enums.GlucoseUnit
 import com.jwoglom.controlx2.shared.util.SendType
+import com.jwoglom.controlx2.sync.gdh.GdhMessageDispatcher
 import com.jwoglom.controlx2.sync.nightscout.NightscoutSyncWorker
 import com.jwoglom.controlx2.sync.xdrip.XdripMessageDispatcher
 import com.jwoglom.controlx2.util.DataClientState
+import com.jwoglom.controlx2.widget.MobiControlWidgetProvider
+import com.jwoglom.controlx2.widget.currentEgvWidgetSample
+import com.jwoglom.controlx2.widget.WidgetCgmPumpPhase
+import com.jwoglom.controlx2.widget.WidgetCgmSessionObservation
+import com.jwoglom.controlx2.widget.WidgetCgmSessionSource
+import com.jwoglom.controlx2.widget.reconcileWidgetCgmSession
 import com.jwoglom.controlx2.util.HistoryLogFetcher
 import com.jwoglom.controlx2.util.HistoryLogSyncWorker
 import com.jwoglom.pumpx2.pump.TandemError
 import com.jwoglom.controlx2.shared.CommServiceCodes
+import com.jwoglom.controlx2.shared.AutomaticBolusCancelResult
+import com.jwoglom.controlx2.shared.AutomaticBolusIdentity
+import com.jwoglom.controlx2.shared.AbandonedBolusCleanupRequest
+import com.jwoglom.controlx2.shared.ManualBolusCancelResult
+import com.jwoglom.controlx2.shared.ManualBolusIdentity
+import com.jwoglom.controlx2.shared.ManualBolusOperation
+import com.jwoglom.controlx2.shared.ManualBolusTerminalAcknowledgement
+import com.jwoglom.controlx2.shared.QuickBolusCancelResult
+import com.jwoglom.controlx2.shared.QuickBolusIdentity
+import com.jwoglom.controlx2.shared.QuickBolusOperation
+import com.jwoglom.controlx2.shared.BolusPermissionOperation
+import com.jwoglom.controlx2.shared.AuthenticatedPhoneBolusSubmission
+import com.jwoglom.controlx2.shared.PostBolusRecordPlan
+import com.jwoglom.controlx2.shared.BolusBgRecordType
 import com.jwoglom.controlx2.shared.InitiateConfirmedBolusSerializer
+import com.jwoglom.controlx2.shared.IntegrationGates
 import com.jwoglom.controlx2.shared.MessagePaths
 import com.jwoglom.controlx2.shared.PumpMessageSerializer
 import com.jwoglom.controlx2.shared.messaging.MessageBus
 import com.jwoglom.controlx2.shared.messaging.MessageBusSender
 import com.jwoglom.controlx2.shared.messaging.MessageListener
+import com.jwoglom.controlx2.shared.messaging.StateKeys
+import com.jwoglom.controlx2.shared.isActiveManualBolus
+import com.jwoglom.controlx2.shared.isActiveQuickBolus
+import com.jwoglom.controlx2.shared.pumpSessionId
+import com.jwoglom.controlx2.shared.pumpSessionIdsMatch
+import com.jwoglom.controlx2.shared.pumpNotificationStatusRequests
 import com.jwoglom.controlx2.shared.util.registerAppReloadShutdownHook
 import com.jwoglom.controlx2.shared.util.setupTimber
 import com.jwoglom.controlx2.shared.util.triggerAppReload
 import com.jwoglom.controlx2.shared.util.shortTime
 import com.jwoglom.controlx2.shared.util.unregisterAppReloadShutdownHook
-import com.jwoglom.controlx2.util.AppVersionCheck
 import com.jwoglom.pumpx2.pump.PumpState
 import com.jwoglom.pumpx2.pump.messages.bluetooth.Characteristic
+import com.jwoglom.pumpx2.pump.messages.Message
 import com.jwoglom.pumpx2.pump.messages.builders.CurrentBatteryRequestBuilder
 import com.jwoglom.pumpx2.pump.messages.models.ApiVersion
 import com.jwoglom.pumpx2.pump.messages.models.InsulinUnit
@@ -63,11 +91,16 @@ import com.jwoglom.pumpx2.pump.messages.models.KnownApiVersion
 import com.jwoglom.pumpx2.pump.messages.models.PairingCodeType
 import com.jwoglom.pumpx2.pump.messages.request.control.InitiateBolusRequest
 import com.jwoglom.pumpx2.pump.messages.request.currentStatus.ControlIQIOBRequest
+import com.jwoglom.pumpx2.pump.messages.request.currentStatus.CurrentBolusStatusRequest
 import com.jwoglom.pumpx2.pump.messages.request.currentStatus.HistoryLogStatusRequest
 import com.jwoglom.pumpx2.pump.messages.request.currentStatus.InsulinStatusRequest
+import com.jwoglom.pumpx2.pump.messages.request.currentStatus.LastBolusStatusV3Request
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.ControlIQIOBResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CGMStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CgmStatusV2Response
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBatteryAbstractResponse
 import com.jwoglom.pumpx2.pump.messages.response.currentStatus.InsulinStatusResponse
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.BolusDeliveryHistoryLog
 import com.welie.blessed.BluetoothPeripheral
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +109,11 @@ import kotlinx.coroutines.cancel
 import timber.log.Timber
 import java.time.Instant
 
+internal fun periodicPumpStatusRequests(apiVersion: ApiVersion): List<Message> = listOf(
+    CurrentBatteryRequestBuilder.create(apiVersion),
+    ControlIQIOBRequest(),
+    InsulinStatusRequest(),
+) + pumpNotificationStatusRequests(apiVersion)
 
 class CommService : Service(), CommServiceCallbacks {
     override val supervisorJob = SupervisorJob()
@@ -100,6 +138,8 @@ class CommService : Service(), CommServiceCallbacks {
     }
 
     private lateinit var bolusManager: BolusManager
+    private val automaticBolusNotifier by lazy { AutomaticBolusNotifier(applicationContext) }
+    private var activeManualBolusIdentity: ManualBolusIdentity? = null
 
     // Hook used by triggerAppReload to give pumpx2 a chance to drop the GATT
     // link cleanly before Runtime.exit(0). Held as a field so we can
@@ -142,7 +182,7 @@ class CommService : Service(), CommServiceCallbacks {
     // PumpFinderCommHandler extracted to pump/PumpFinderCommHandler.kt
 
     override fun sendWearCommMessage(path: String, message: ByteArray) {
-        Timber.i("service sendMessage: $path ${String(message)}")
+        Timber.i("service sendMessage: $path ${MessagePaths.payloadForLog(path, message)}")
         messageBus.sendMessage(path, message, MessageBusSender.COMM_SERVICE)
     }
 
@@ -164,12 +204,21 @@ class CommService : Service(), CommServiceCallbacks {
             }
 
             Timber.i("running periodicUpdateTask")
-            sendPumpCommMessages(PumpMessageSerializer.toBulkBytes(listOf(
-                CurrentBatteryRequestBuilder.create(apiVersion()),
-                ControlIQIOBRequest(),
-                InsulinStatusRequest(),
-                HistoryLogStatusRequest()
-            )))
+            sendPumpCommMessages(
+                PumpMessageSerializer.toBulkBytes(periodicPumpStatusRequests(apiVersion()))
+            )
+        }
+    }
+
+    // Qualifying events are the primary bolus trigger. This slower watchdog catches a missed
+    // event without maintaining the former 2-second idle poll which congested normal traffic.
+    private val automaticBolusMonitorIntervalMs: Long = 15_000L
+    private val automaticBolusMonitorTask: Runnable = object : Runnable {
+        override fun run() {
+            pumpCommHandler?.postDelayed(this, automaticBolusMonitorIntervalMs)
+            if (pumpCommHandler?.currentSession?.isActive == true) {
+                pumpCommHandler?.requestBolusStatusWatchdog()
+            }
         }
     }
 
@@ -179,13 +228,6 @@ class CommService : Service(), CommServiceCallbacks {
 
     fun getPumpSession(): PumpSession? {
         return pumpCommHandler?.currentSession
-    }
-
-    private val checkForUpdatesDelayMs: Long = 1000 * 30 // 30 seconds
-    private var checkForUpdatesTask: Runnable = Runnable {
-        if (Prefs(applicationContext).checkForUpdates()) {
-            AppVersionCheck(applicationContext)
-        }
     }
 
     override fun onCreate() {
@@ -200,6 +242,12 @@ class CommService : Service(), CommServiceCallbacks {
         Timber.i("service onCreate")
 
         registerAppReloadShutdownHook(appReloadShutdownHook)
+
+        if (Prefs(applicationContext).developerPreviewEnabled()) {
+            Timber.w("commService is short-circuiting in developer preview")
+            stopSelf()
+            return
+        }
 
         // The Wear data layer auto-starts CommService whenever a /to-phone or
         // /from-pump message arrives (see AndroidManifest intent-filter). When
@@ -262,7 +310,7 @@ class CommService : Service(), CommServiceCallbacks {
             pumpCommHandler = PumpCommHandler(serviceLooper!!, this)
 
             pumpCommHandler?.postDelayed(periodicUpdateTask, periodicUpdateIntervalMs)
-            pumpCommHandler?.postDelayed(checkForUpdatesTask, checkForUpdatesDelayMs)
+            pumpCommHandler?.postDelayed(automaticBolusMonitorTask, automaticBolusMonitorIntervalMs)
         }
 
 
@@ -278,7 +326,7 @@ class CommService : Service(), CommServiceCallbacks {
     internal fun handleMessageReceived(path: String, data: ByteArray, sourceNodeId: String) {
         // Ignore noisy loopback logs for pump-originated broadcasts.
         if (!path.startsWith(MessagePaths.PREFIX_FROM_PUMP)) {
-            Timber.d("service messageReceived: $path ${String(data)} from $sourceNodeId")
+            Timber.d("service messageReceived: $path ${MessagePaths.payloadForLog(path, data)} from $sourceNodeId")
         }
         httpDebugApiService?.onMessagingReceived(path, data, sourceNodeId)
         when (path) {
@@ -319,7 +367,7 @@ class CommService : Service(), CommServiceCallbacks {
                     Timber.i("stop-pump-finder-next: filterToMac=$filterToMac pairingCodeType=$pairingCodeType")
 
                     pumpCommHandler?.postDelayed(periodicUpdateTask, periodicUpdateIntervalMs)
-                    pumpCommHandler?.postDelayed(checkForUpdatesTask, checkForUpdatesDelayMs)
+                    pumpCommHandler?.postDelayed(automaticBolusMonitorTask, automaticBolusMonitorIntervalMs)
                     sendInitPumpComm(pairingCodeTypeEnum, filterToMac)
                     sendWearCommMessage(MessagePaths.TO_SERVER_COMM_STARTED, "".toByteArray())
                 }
@@ -338,12 +386,21 @@ class CommService : Service(), CommServiceCallbacks {
                 sendCheckPumpFinderFoundPumps()
             }
             MessagePaths.TO_SERVER_REQUEST_SERVICE_STATUS -> {
-                Timber.i("request-service-status received, responding with current status")
+                val includeProfileSnapshot = String(data) == SERVICE_SNAPSHOT_WITH_PROFILE
+                Timber.i(
+                    "request-service-status received, responding with current status " +
+                        "(includeProfile=$includeProfileSnapshot)",
+                )
                 if (Prefs(applicationContext).pumpFinderServiceEnabled()) {
                     sendWearCommMessage(MessagePaths.TO_SERVER_PUMP_FINDER_STARTED, "".toByteArray())
                 } else {
                     sendWearCommMessage(MessagePaths.TO_SERVER_COMM_STARTED, "".toByteArray())
+                    pumpCommHandler?.refreshConnectedPumpSnapshotForUi(includeProfileSnapshot)
                 }
+            }
+            MessagePaths.TO_SERVER_RETRY_INITIAL_PROFILE_READ -> {
+                Timber.i("retry-initial-profile-read received")
+                pumpCommHandler?.retryInitialPumpProfileRead()
             }
             MessagePaths.TO_SERVER_REFRESH_HISTORY_LOG_SYNC -> {
                 Timber.i("refresh-history-log-sync received")
@@ -388,18 +445,126 @@ class CommService : Service(), CommServiceCallbacks {
             MessagePaths.TO_SERVER_IS_PUMP_CONNECTED -> {
                 sendCheckPumpConnected()
             }
+            MessagePaths.TO_SERVER_ENSURE_PUMP_CONNECTION -> {
+                Timber.i("explicit connection check requested")
+                sendEnsurePumpConnection()
+            }
             MessagePaths.TO_PUMP_PAIR -> {
                 sendPumpPairingMessage()
             }
             MessagePaths.TO_SERVER_BOLUS_REQUEST_WEAR -> {
-                bolusManager.confirmBolusRequest(PumpMessageSerializer.fromBytes(data) as InitiateBolusRequest, BolusManager.BolusRequestSource.WEAR)
+                if (IntegrationGates.WATCH_INTEGRATION_ENABLED) {
+                    bolusManager.confirmBolusRequest(
+                        PumpMessageSerializer.fromBytes(data) as InitiateBolusRequest,
+                        BolusManager.BolusRequestSource.WEAR,
+                    )
+                } else {
+                    // Defense in depth: reject stale or injected watch requests even though the
+                    // Wear message transport is also disabled in MessageBusFactory.
+                    Timber.w("Blocked watch-originated bolus request: watch integration is disabled")
+                }
             }
             MessagePaths.TO_SERVER_BOLUS_REQUEST_PHONE -> {
-                bolusManager.confirmBolusRequest(PumpMessageSerializer.fromBytes(data) as InitiateBolusRequest, BolusManager.BolusRequestSource.PHONE)
+                // MainActivity emits this path only after successful device authentication and
+                // immutable request revalidation. Do not send it through the legacy notification
+                // confirmation path: that creates a second decision point and can strand the
+                // already-granted pump permission while the user dismisses another dialog.
+                val phoneSubmission = AuthenticatedPhoneBolusSubmission.decode(data) ?: run {
+                    // Compatibility for a request staged by the immediately previous app build.
+                    // It can still be authenticated and delivered, but it has no trustworthy
+                    // metadata for a post-acceptance BG/carb history entry.
+                    val legacyRequest = runCatching {
+                        PumpMessageSerializer.fromBytes(data) as? InitiateBolusRequest
+                    }.getOrNull()
+                    legacyRequest?.let {
+                        AuthenticatedPhoneBolusSubmission(
+                            request = it,
+                            postBolusRecords = PostBolusRecordPlan(
+                                bolusId = it.bolusID,
+                                bgMgdl = null,
+                                bgRecordType = BolusBgRecordType.NONE,
+                                carbsGrams = 0,
+                            ),
+                        )
+                    }
+                }
+                val submitted = phoneSubmission?.let {
+                    bolusManager.submitAuthenticatedPhoneBolus(
+                        request = it.request,
+                        postBolusRecords = it.postBolusRecords,
+                    )
+                } ?: false
+                if (submitted) {
+                    // The unfinished-draft lifecycle ends only after the authenticated request
+                    // has been synchronously persisted, signed, and handed to the service.
+                    BolusTimeoutReminder(this).completeSession()
+                } else {
+                    Timber.e("Authenticated phone bolus could not be durably staged")
+                    sendBolusPermissionRelease()
+                    // Staging failure is terminal for this draft and starts durable permission
+                    // cleanup, so do not leave a stale unfinished-bolus reminder behind.
+                    BolusTimeoutReminder(this).completeSession()
+                    sendWearCommMessage(
+                        MessagePaths.TO_CLIENT_BOLUS_REJECTED,
+                        "local_submission_persistence_failed".toByteArray(),
+                    )
+                }
             }
             MessagePaths.TO_SERVER_BOLUS_CANCEL -> {
                 Timber.i("bolus state cancelled")
                 bolusManager.resetBolusPrefs()
+            }
+            MessagePaths.TO_SERVER_CANCEL_AUTOMATIC_BOLUS -> {
+                val identity = AutomaticBolusIdentity.decode(data)
+                if (identity == null) {
+                    Timber.e("Invalid automatic bolus cancellation identity")
+                } else {
+                    sendAutomaticBolusCancellation(identity)
+                }
+            }
+            MessagePaths.TO_SERVER_CANCEL_MANUAL_BOLUS -> {
+                val identity = ManualBolusIdentity.decode(data)
+                if (identity == null) {
+                    Timber.e("Invalid manual bolus cancellation identity")
+                } else {
+                    sendManualBolusCancellation(identity)
+                }
+            }
+            MessagePaths.TO_SERVER_CANCEL_QUICK_BOLUS -> {
+                val identity = QuickBolusIdentity.decode(data)
+                if (identity == null) {
+                    Timber.e("Invalid Quick Bolus cancellation identity")
+                } else {
+                    sendQuickBolusCancellation(identity)
+                }
+            }
+            MessagePaths.TO_SERVER_ACKNOWLEDGE_MANUAL_BOLUS_TERMINAL -> {
+                val acknowledgement = ManualBolusTerminalAcknowledgement.decode(data)
+                if (acknowledgement == null) {
+                    Timber.e("Invalid manual bolus terminal acknowledgement")
+                } else {
+                    sendManualBolusTerminalAcknowledgement(acknowledgement)
+                }
+            }
+            MessagePaths.TO_SERVER_RECONCILE_MANUAL_BOLUS -> {
+                sendManualBolusReconciliation()
+            }
+            MessagePaths.TO_SERVER_ACKNOWLEDGE_QUICK_BOLUS_TERMINAL -> {
+                val identity = QuickBolusIdentity.decode(data)
+                if (identity == null) {
+                    Timber.e("Invalid Quick Bolus terminal acknowledgement")
+                } else {
+                    sendQuickBolusTerminalAcknowledgement(identity)
+                }
+            }
+            MessagePaths.TO_SERVER_ACQUIRE_BOLUS_PERMISSION -> {
+                sendBolusPermissionAcquisition()
+            }
+            MessagePaths.TO_SERVER_PREPARE_BOLUS_WORKFLOW -> {
+                sendBolusWorkflowPreparation()
+            }
+            MessagePaths.TO_SERVER_RELEASE_BOLUS_PERMISSION -> {
+                sendBolusPermissionRelease(AbandonedBolusCleanupRequest.decode(data))
             }
             MessagePaths.TO_SERVER_INITIATE_CONFIRMED_BOLUS -> {
                 // removed: initialized check
@@ -475,26 +640,151 @@ class CommService : Service(), CommServiceCallbacks {
     }
 
     private val xdripMessageDispatcher by lazy { XdripMessageDispatcher(applicationContext) }
+    private val gdhMessageDispatcher by lazy { GdhMessageDispatcher(applicationContext) }
+    private val pumpAlertNotifier by lazy { PumpAlertNotifier(applicationContext) }
 
     override fun dispatchExternalMessage(message: com.jwoglom.pumpx2.pump.messages.Message) {
         xdripMessageDispatcher.onReceiveMessage(message)
+        gdhMessageDispatcher.onReceiveMessage(message)
     }
 
     override fun updateComplicationData(key: String, value: String, timestamp: Instant) {
         val state = DataClientState(applicationContext)
         val pair = Pair(value, timestamp)
+        val prefs = Prefs(applicationContext)
         when (key) {
             "pumpBattery" -> state.pumpBattery = pair
             "pumpIOB" -> state.pumpIOB = pair
             "pumpCartridgeUnits" -> state.pumpCartridgeUnits = pair
             "pumpCurrentBasal" -> state.pumpCurrentBasal = pair
-            "cgmReading" -> state.cgmReading = pair
+            StateKeys.PUMP_CONTROL_IQ_MODE -> state.pumpControlIqMode = pair
+            "cgmReading" -> {
+                state.cgmReading = pair
+                val currentSession = prefs.widgetCgmSessionCache()
+                prefs.setWidgetCgmReadingSensorStartedTimestamp(
+                    currentSession
+                        ?.takeIf { it.phase == WidgetCgmSessionPhase.ACTIVE }
+                        ?.sensorStartedTimestamp,
+                )
+            }
         }
+        // The widget only consumes state the existing pump path has already received. Its
+        // debounced redraw does not enqueue or request any pump command.
+        MobiControlWidgetProvider.requestUpdate(applicationContext)
     }
 
     // --- Debug API callbacks ---
     override fun onPumpMessageReceived(message: com.jwoglom.pumpx2.pump.messages.Message, source: SendType) {
         httpDebugApiService?.onPumpMessageReceived(message, source = source)
+        val widgetPrefs = Prefs(applicationContext)
+        when (message) {
+            is CgmStatusV2Response -> {
+                updateWidgetCgmSession(
+                    widgetPrefs,
+                    WidgetCgmSessionObservation(
+                        source = WidgetCgmSessionSource.V2,
+                        phase = when (message.sessionState) {
+                            CgmStatusV2Response.SessionState.SESSION_ACTIVE ->
+                                WidgetCgmPumpPhase.ACTIVE
+                            CgmStatusV2Response.SessionState.STATUS_START_PENDING ->
+                                WidgetCgmPumpPhase.START_PENDING
+                            CgmStatusV2Response.SessionState.SESSION_STOP_PENDING ->
+                                WidgetCgmPumpPhase.STOP_PENDING
+                            CgmStatusV2Response.SessionState.STATUS_STOPPED ->
+                                WidgetCgmPumpPhase.STOPPED
+                            else -> WidgetCgmPumpPhase.UNAVAILABLE
+                        },
+                        sensorStartedTimestamp = message.sensorStartedTimestamp,
+                        sessionTimeRemainingSeconds = message.sessionTimeRemainingSeconds,
+                        sessionDurationSeconds = message.sessionDurationSeconds,
+                    ),
+                )
+            }
+            is CGMStatusResponse -> {
+                updateWidgetCgmSession(
+                    widgetPrefs,
+                    WidgetCgmSessionObservation(
+                        source = WidgetCgmSessionSource.LEGACY,
+                        phase = when (message.sessionState) {
+                            CGMStatusResponse.SessionState.SESSION_ACTIVE ->
+                                WidgetCgmPumpPhase.ACTIVE
+                            CGMStatusResponse.SessionState.SESSION_START_PENDING ->
+                                WidgetCgmPumpPhase.START_PENDING
+                            CGMStatusResponse.SessionState.SESSION_STOP_PENDING ->
+                                WidgetCgmPumpPhase.STOP_PENDING
+                            CGMStatusResponse.SessionState.SESSION_STOPPED ->
+                                WidgetCgmPumpPhase.STOPPED
+                            else -> WidgetCgmPumpPhase.UNAVAILABLE
+                        },
+                        sensorStartedTimestamp = message.sensorStartedTimestamp,
+                    ),
+                )
+            }
+            is com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentEGVGuiDataResponse -> {
+                widgetPrefs.setWidgetCgmSampleCache(
+                    currentEgvWidgetSample(
+                        response = message,
+                        session = widgetPrefs.widgetCgmSessionCache(),
+                        observedAtEpochMillis = System.currentTimeMillis(),
+                    ),
+                )
+                MobiControlWidgetProvider.requestUpdate(applicationContext)
+            }
+        }
+        val pumpSystemNotificationStatus = when (message) {
+            is com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlertStatusResponse,
+            is com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlarmStatusResponse,
+            is com.jwoglom.pumpx2.pump.messages.response.currentStatus.CGMAlertStatusResponse,
+            is com.jwoglom.pumpx2.pump.messages.response.currentStatus.ReminderStatusResponse,
+            -> true
+            else -> false
+        }
+        if (pumpSystemNotificationStatus) {
+            val pumpSid = pumpCommHandler?.getPumpSid() ?: Prefs(applicationContext).currentPumpSid()
+            val pumpSessionId = pumpCommState.lastTimeSinceReset?.pumpSessionId()
+            if (pumpSessionId != null) when (message) {
+                is com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlertStatusResponse ->
+                    pumpAlertNotifier.onStatus(message, pumpSid, pumpSessionId)
+                is com.jwoglom.pumpx2.pump.messages.response.currentStatus.AlarmStatusResponse ->
+                    pumpAlertNotifier.onStatus(message, pumpSid, pumpSessionId)
+                is com.jwoglom.pumpx2.pump.messages.response.currentStatus.CGMAlertStatusResponse ->
+                    pumpAlertNotifier.onStatus(message, pumpSid, pumpSessionId)
+                is com.jwoglom.pumpx2.pump.messages.response.currentStatus.ReminderStatusResponse ->
+                    pumpAlertNotifier.onStatus(message, pumpSid, pumpSessionId)
+            }
+        }
+    }
+
+    private fun updateWidgetCgmSession(
+        prefs: Prefs,
+        observation: WidgetCgmSessionObservation,
+    ) {
+        when (observation.phase) {
+            WidgetCgmPumpPhase.START_PENDING -> {
+                // Passive evidence only: bind an app-authored start marker to the pump's observed
+                // lifecycle so a legitimate long warm-up cannot look like an external session.
+                prefs.markCgmSessionStartPendingObserved()
+            }
+            WidgetCgmPumpPhase.STOP_PENDING,
+            WidgetCgmPumpPhase.STOPPED,
+            -> if (prefs.cgmSessionStartPendingObserved()) {
+                // The pump moved away from an observed app-authored start before it became Active.
+                // Do not let that abandoned marker suppress adoption of a later sensor.
+                prefs.clearCgmSessionStartInitiated()
+            }
+            else -> Unit
+        }
+        val reconciled = reconcileWidgetCgmSession(
+            current = prefs.widgetCgmSessionCache(),
+            observation = observation,
+            observedAtEpochMillis = System.currentTimeMillis(),
+        )
+        prefs.setWidgetCgmSessionCache(reconciled)
+        if (reconciled.phase != WidgetCgmSessionPhase.ACTIVE) {
+            prefs.setWidgetCgmReadingSensorStartedTimestamp(null)
+            prefs.setWidgetCgmSampleCache(null)
+        }
+        MobiControlWidgetProvider.requestUpdate(applicationContext)
     }
 
     override fun onPumpCriticalError(error: TandemError, source: SendType) {
@@ -503,19 +793,168 @@ class CommService : Service(), CommServiceCallbacks {
 
     // --- Bolus response broadcasting ---
     override fun broadcastBolusInitiateResponse(responseBytes: ByteArray) {
+        val response = PumpMessageSerializer.fromBytes(responseBytes) as?
+            com.jwoglom.pumpx2.pump.messages.response.control.InitiateBolusResponse
         val intent = android.content.Intent(applicationContext, BolusNotificationBroadcastReceiver::class.java).apply {
             putExtra("action", "INITIATE_RESPONSE")
             putExtra("response", responseBytes)
+            response?.takeIf { it.wasBolusInitiated() }
+                ?.let { manualBolusIdentityOrNull(it.bolusId) }
+                ?.let { putExtra(BolusNotificationBroadcastReceiver.EXTRA_MANUAL_BOLUS_IDENTITY, it.encode()) }
         }
         applicationContext.sendBroadcast(intent)
     }
 
     override fun broadcastBolusStatusUpdate(statusBytes: ByteArray) {
-        val intent = android.content.Intent(applicationContext, BolusNotificationBroadcastReceiver::class.java).apply {
-            putExtra("action", "STATUS_UPDATE")
-            putExtra("status", statusBytes)
+        val status = PumpMessageSerializer.fromBytes(statusBytes) as?
+            com.jwoglom.pumpx2.pump.messages.response.currentStatus.CurrentBolusStatusResponse
+        var manualNotificationIdentity: ManualBolusIdentity? = null
+        if (status != null) {
+            val transition = automaticBolusNotifier.onStatus(
+                response = status,
+                pumpSid = pumpCommHandler?.getPumpSid() ?: Prefs(applicationContext).currentPumpSid(),
+                pumpSession = pumpCommState.lastTimeSinceReset,
+                cancellationEnabled = Prefs(applicationContext).insulinDeliveryActions(),
+            )
+            var reachedTerminalState = transition == AutomaticBolusTransition.ENDED
+            val previouslyActiveManualIdentity = activeManualBolusIdentity
+            val responseIdentity = if (
+                status.bolusId > 0 &&
+                status.bolusSource == BolusDeliveryHistoryLog.BolusSource.BLUETOOTH_REMOTE_BOLUS
+            ) {
+                manualBolusIdentityOrNull(status.bolusId)
+            } else {
+                null
+            }
+            val notificationRoute = routeManualBolusSystemNotification(
+                response = status,
+                activeIdentity = activeManualBolusIdentity,
+                responseIdentity = responseIdentity,
+            )
+            manualNotificationIdentity = notificationRoute.notificationIdentity
+            activeManualBolusIdentity = notificationRoute.nextActiveIdentity
+            // Preserve the pre-existing pump/history refresh lifecycle exactly. The source-aware
+            // route above changes only which Android notification receives this shared status.
+            if (previouslyActiveManualIdentity != null && !status.isActiveManualBolus()) {
+                reachedTerminalState = true
+            }
+            if (manualNotificationIdentity != null && status.isTerminalBolusStatus()) {
+                Timber.i(
+                    "Manual bolus reached pump-confirmed terminal state: " +
+                        "$manualNotificationIdentity",
+                )
+            }
+            val quickOperation = Prefs(applicationContext).quickBolusOperation()
+            if (status.isActiveQuickBolus() || quickOperation?.isUnresolved == true) {
+                if (!BolusStatusPolling.isRunning()) {
+                    BolusStatusPolling.start(
+                        requestStatus = { pumpCommHandler?.requestBolusStatusWatchdog() },
+                    )
+                }
+            }
+
+            if (reachedTerminalState) {
+                sendPumpCommMessagesBustCache(
+                    PumpMessageSerializer.toBulkBytes(listOf(
+                        lastBolusStatusRequest(),
+                        HistoryLogStatusRequest(),
+                    )),
+                )
+                pumpCommHandler?.refreshHistoryLogSyncWorker(triggerImmediateSync = true)
+            }
         }
-        applicationContext.sendBroadcast(intent)
+        manualNotificationIdentity?.let { identity ->
+            val intent = android.content.Intent(
+                applicationContext,
+                BolusNotificationBroadcastReceiver::class.java,
+            ).apply {
+                putExtra("action", "STATUS_UPDATE")
+                putExtra("status", statusBytes)
+                putExtra(BolusNotificationBroadcastReceiver.EXTRA_MANUAL_BOLUS_IDENTITY, identity.encode())
+            }
+            applicationContext.sendBroadcast(intent)
+        }
+    }
+
+    override fun broadcastAutomaticBolusCancelResult(resultBytes: ByteArray) {
+        AutomaticBolusCancelResult.decode(resultBytes)?.let(automaticBolusNotifier::onCancelResult)
+        sendWearCommMessage(MessagePaths.TO_CLIENT_AUTOMATIC_BOLUS_CANCEL_RESULT, resultBytes)
+        // Cancellation acknowledgement is not terminal bolus status. Refresh
+        // current and last status so Dashboard/history use pump confirmation.
+        sendPumpCommMessagesBustCache(
+            PumpMessageSerializer.toBulkBytes(listOf(
+                CurrentBolusStatusRequest(),
+                lastBolusStatusRequest(),
+            )),
+        )
+    }
+
+    override fun broadcastManualBolusCancelResult(resultBytes: ByteArray) {
+        sendWearCommMessage(MessagePaths.TO_CLIENT_MANUAL_BOLUS_CANCEL_RESULT, resultBytes)
+        // PumpCommHandler owns the bounded Current/Last/history reconciliation. Keeping that
+        // sequence in one place avoids duplicate status bursts after a cancellation response.
+    }
+
+    override fun loadManualBolusOperation(): ManualBolusOperation? =
+        Prefs(applicationContext).manualBolusOperation()
+
+    override fun persistManualBolusOperation(operation: ManualBolusOperation) {
+        // commit() in Prefs is intentional: the operation must survive a process or radio failure
+        // immediately after the following BLE write.
+        Prefs(applicationContext).setManualBolusOperation(operation)
+        if (!operation.isUnresolved) {
+            BolusStatusPolling.stop()
+        }
+        sendWearCommMessage(MessagePaths.TO_CLIENT_MANUAL_BOLUS_OPERATION, operation.encode())
+    }
+
+    override fun broadcastQuickBolusCancelResult(resultBytes: ByteArray) {
+        sendWearCommMessage(MessagePaths.TO_CLIENT_QUICK_BOLUS_CANCEL_RESULT, resultBytes)
+        sendPumpCommMessagesBustCache(
+            PumpMessageSerializer.toBulkBytes(listOf(
+                CurrentBolusStatusRequest(),
+                lastBolusStatusRequest(),
+            )),
+        )
+    }
+
+    override fun loadQuickBolusOperation(): QuickBolusOperation? =
+        Prefs(applicationContext).quickBolusOperation()
+
+    override fun quickBolusLifecycleEnabled(): Boolean = true
+
+    override fun persistQuickBolusOperation(operation: QuickBolusOperation) {
+        Prefs(applicationContext).setQuickBolusOperation(operation)
+        if (!operation.isUnresolved) {
+            BolusStatusPolling.stop()
+        }
+        sendWearCommMessage(MessagePaths.TO_CLIENT_QUICK_BOLUS_OPERATION, operation.encode())
+    }
+
+    override fun loadBolusPermissionOperation(): BolusPermissionOperation? =
+        Prefs(applicationContext).bolusPermissionOperation()
+
+    override fun persistBolusPermissionOperation(operation: BolusPermissionOperation) {
+        // The reservation/release phase must be durable before the corresponding BLE write.
+        Prefs(applicationContext).setBolusPermissionOperation(operation)
+        sendWearCommMessage(MessagePaths.TO_CLIENT_BOLUS_PERMISSION_OPERATION, operation.encode())
+    }
+
+    override fun loadPostBolusRecordPlan(): PostBolusRecordPlan? =
+        bolusManager.loadPostBolusRecordPlan()
+
+    override fun persistPostBolusRecordPlan(plan: PostBolusRecordPlan): Boolean =
+        bolusManager.persistPostBolusRecordPlan(plan)
+
+    override fun clearPostBolusRecordPlan(): Boolean = bolusManager.clearPostBolusRecordPlan()
+
+    private fun lastBolusStatusRequest(): Message {
+        val apiVersion = PumpState.getPumpAPIVersion() ?: KnownApiVersion.API_V2_5.get()
+        return if (apiVersion.compareTo(KnownApiVersion.MOBI_API_V3_5) >= 0) {
+            LastBolusStatusV3Request()
+        } else {
+            com.jwoglom.pumpx2.pump.messages.builders.LastBolusStatusRequestBuilder.create(apiVersion)
+        }
     }
 
     // --- History log factories ---
@@ -529,7 +968,11 @@ class CommService : Service(), CommServiceCallbacks {
             pumpSid = pumpSid,
             pumpSession = pumpSession,
             autoFetchEnabled = autoFetchEnabled,
-            broadcastCallback = { item -> httpDebugApiService?.onHistoryLogInsertedCallback?.invoke(item) }
+            broadcastCallback = { item ->
+                httpDebugApiService?.onHistoryLogInsertedCallback?.invoke(item)
+                xdripMessageDispatcher.onHistoryLogItem(item)
+                MobiControlWidgetProvider.requestUpdate(applicationContext)
+            }
         )
     }
 
@@ -554,12 +997,18 @@ class CommService : Service(), CommServiceCallbacks {
         Timber.i("CommService onStartCommand $intent $flags $startId")
 
         if (started) {
-            Timber.w("CommService onStartCommand when already running, ignoring")
+            if (!Prefs(applicationContext).pumpFinderServiceEnabled() &&
+                Prefs(applicationContext).currentPumpSid() >= 0) {
+                Timber.i("CommService already running; ensuring the saved pump connection is active")
+                sendEnsurePumpConnection()
+            } else {
+                Timber.i("CommService already running without an established pump; no reconnect re-arm")
+            }
             return START_STICKY
         }
 
         started = true
-        Toast.makeText(this, "ControlX2 service starting", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "${getString(R.string.app_name)} service starting", Toast.LENGTH_SHORT).show()
 
         updateNotification("Initializing...")
 
@@ -598,7 +1047,7 @@ class CommService : Service(), CommServiceCallbacks {
             Timber.e(e, "Unable to start foreground service: missing connectedDevice permissions")
             Toast.makeText(
                 this,
-                "ControlX2 needs Bluetooth permissions before starting the background service",
+                "${getString(R.string.app_name)} needs Bluetooth permissions before starting the background service",
                 Toast.LENGTH_LONG
             ).show()
             stopSelf()
@@ -617,10 +1066,11 @@ class CommService : Service(), CommServiceCallbacks {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Timber.w("CommService onTaskRemoved")
-        triggerAppReload(applicationContext)
-        Toast.makeText(this, "ControlX2 service removed", Toast.LENGTH_SHORT).show()
-        stopSelf()
+        // Dismissing the UI task is not a request to disconnect from the pump. CommService is a
+        // START_STICKY connected-device foreground service, so retain the live BLE session and
+        // any in-flight bolus/status reconciliation. The previous reload + stopSelf sequence
+        // created multiple service processes and guaranteed a mid-bolus disconnect.
+        Timber.i("CommService onTaskRemoved: retaining foreground pump connection")
     }
 
     private data class DisplayablePumpData(
@@ -690,6 +1140,13 @@ class CommService : Service(), CommServiceCallbacks {
             } else {
                 msg.obj = "${pairingCodeType.label}"
             }
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendEnsurePumpConnection() {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.ENSURE_PUMP_CONNECTION.ordinal
             pumpCommHandler?.sendMessage(msg)
         }
     }
@@ -800,8 +1257,98 @@ class CommService : Service(), CommServiceCallbacks {
         }
     }
 
+    private fun sendAutomaticBolusCancellation(identity: AutomaticBolusIdentity) {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.CANCEL_AUTOMATIC_BOLUS.ordinal
+            msg.obj = identity
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendManualBolusCancellation(identity: ManualBolusIdentity) {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.CANCEL_MANUAL_BOLUS.ordinal
+            msg.obj = identity
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendManualBolusReconciliation() {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.RECONCILE_MANUAL_BOLUS.ordinal
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendQuickBolusCancellation(identity: QuickBolusIdentity) {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.CANCEL_QUICK_BOLUS.ordinal
+            msg.obj = identity
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendManualBolusTerminalAcknowledgement(
+        acknowledgement: ManualBolusTerminalAcknowledgement,
+    ) {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.ACKNOWLEDGE_MANUAL_BOLUS_TERMINAL.ordinal
+            msg.obj = acknowledgement
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendQuickBolusTerminalAcknowledgement(identity: QuickBolusIdentity) {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.ACKNOWLEDGE_QUICK_BOLUS_TERMINAL.ordinal
+            msg.obj = identity
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendBolusPermissionAcquisition() {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.ACQUIRE_BOLUS_PERMISSION.ordinal
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendBolusWorkflowPreparation() {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.PREPARE_BOLUS_WORKFLOW.ordinal
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun sendBolusPermissionRelease(cleanupRequest: AbandonedBolusCleanupRequest? = null) {
+        pumpCommHandler?.obtainMessage()?.also { msg ->
+            msg.what = CommServiceCodes.RELEASE_BOLUS_PERMISSION.ordinal
+            msg.obj = cleanupRequest
+            pumpCommHandler?.sendMessage(msg)
+        }
+    }
+
+    private fun manualBolusIdentityOrNull(bolusId: Int): ManualBolusIdentity? {
+        val sid = pumpCommHandler?.getPumpSid() ?: Prefs(applicationContext).currentPumpSid()
+        val sessionId = pumpCommState.lastTimeSinceReset?.pumpSessionId()
+        return if (sid >= 0 && sessionId != null && sessionId > 0L && bolusId > 0) {
+            val persistedIdentity = Prefs(applicationContext).manualBolusOperation()?.identity
+            persistedIdentity?.takeIf {
+                it.pumpSid == sid &&
+                    pumpSessionIdsMatch(it.pumpSessionId, sessionId) &&
+                    it.bolusId == bolusId
+            } ?: ManualBolusIdentity(sid, sessionId, bolusId)
+        } else {
+            null
+        }
+    }
+
 
     companion object {
+        const val ACTION_OPEN_CONNECTION_STATUS =
+            "com.jwoglom.controlx2.action.OPEN_CONNECTION_STATUS"
+        private const val SERVICE_SNAPSHOT_WITH_PROFILE = "include_profile"
+
         fun cancelAutoApproveStatic(context: Context?) {
             BolusManager.cancelAutoApproveStatic(context)
         }
@@ -811,14 +1358,20 @@ class CommService : Service(), CommServiceCallbacks {
         super.onDestroy()
         unregisterAppReloadShutdownHook(appReloadShutdownHook)
         pumpCommHandler?.stopHistoryLogSyncWorker()
+        pumpCommHandler?.removeCallbacks(automaticBolusMonitorTask)
+        BolusStatusPolling.stop()
         scope.cancel()
-        messageBus.close()
+        // Developer Preview and other precondition failures stop the service before the
+        // MessageBus is created. Service teardown must remain valid on those short paths.
+        if (::messageBus.isInitialized) {
+            messageBus.close()
+        }
         httpDebugApiService?.stop()
-        Toast.makeText(this, "ControlX2 service destroyed", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "${getString(R.string.app_name)} service destroyed", Toast.LENGTH_SHORT).show()
     }
 
     private fun createNotification(): Notification {
-        val notificationChannelId = "ControlX2 Background Notification"
+        val notificationChannelId = "$packageName Background Notification"
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager;
         val channel = NotificationChannel(
@@ -835,9 +1388,12 @@ class CommService : Service(), CommServiceCallbacks {
         notificationManager.createNotificationChannel(channel)
 
         val pendingIntent: PendingIntent =
-            Intent(this, MainActivity::class.java).let { notificationIntent ->
+            Intent(this, MainActivity::class.java).apply {
+                action = ACTION_OPEN_CONNECTION_STATUS
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }.let { notificationIntent ->
                 PendingIntent.getActivity(this, 0, notificationIntent,
-                    PendingIntent.FLAG_IMMUTABLE)
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             }
 
         val builder: NotificationCompat.Builder = NotificationCompat.Builder(
@@ -872,8 +1428,9 @@ class CommService : Service(), CommServiceCallbacks {
             .setContentTitle(title)
             .setContentText(contentText)
             .setContentIntent(pendingIntent)
-            .setFullScreenIntent(pendingIntent, false)
-            .setSmallIcon(IconCompat.createWithResource(this, R.drawable.pump_notif_1d))
+            .setSmallIcon(
+                IconCompat.createWithResource(this, R.drawable.ic_mobicontrol_notification),
+            )
             .setTicker(currentPumpData.statusText)
             .setPriority(NotificationCompat.PRIORITY_MAX) // for under android 26 compatibility
             .setOngoing(true)

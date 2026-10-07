@@ -357,7 +357,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun sendMessage(path: String, message: ByteArray) {
-        Timber.i("wear sendMessage: $path ${String(message)}")
+        Timber.i("wear sendMessage: $path ${MessagePaths.payloadForLog(path, message)}")
         messageBus.sendMessage(path, message, MessageBusSender.MOBILE_UI)
     }
 

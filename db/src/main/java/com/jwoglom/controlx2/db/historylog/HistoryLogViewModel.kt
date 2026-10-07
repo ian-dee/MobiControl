@@ -1,48 +1,97 @@
 package com.jwoglom.controlx2.db.historylog
 
 import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.asLiveData
 import androidx.lifecycle.viewModelScope
-import com.jwoglom.pumpx2.pump.messages.helpers.Dates
+import com.jwoglom.controlx2.shared.util.phoneLocalTimeAsTandemEpochSeconds
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.HistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.HistoryLogParser.LOG_MESSAGE_CLASS_TO_ID
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.CgmBleCalibrationEvtG7HistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.CgmCalibrationG7HistoryLog
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import timber.log.Timber
-import java.time.Instant
 
-class HistoryLogViewModel(private val repo: HistoryLogRepo, private val pumpSid: Int): ViewModel() {
-    val count: LiveData<Long?> = repo.getCount(pumpSid).asLiveData()
-    val all: LiveData<List<HistoryLogItem>> = repo.getAll(pumpSid).asLiveData()
-    val latest: LiveData<HistoryLogItem?> = repo.getLatest(pumpSid).asLiveData()
-    val oldest: LiveData<HistoryLogItem?> = repo.getOldest(pumpSid).asLiveData()
+@OptIn(ExperimentalCoroutinesApi::class)
+class HistoryLogViewModel(private val repo: HistoryLogRepo, pumpSid: Int): ViewModel() {
+    private val pumpSidFlow = MutableStateFlow(pumpSid)
+
+    val count: LiveData<Long?> = pumpSidFlow
+        .flatMapLatest { repo.getCount(it) }
+        .asLiveData()
+    val all: LiveData<List<HistoryLogItem>> = pumpSidFlow
+        .flatMapLatest { repo.getAll(it) }
+        .asLiveData()
+    val latest: LiveData<HistoryLogItem?> = pumpSidFlow
+        .flatMapLatest { repo.getLatest(it) }
+        .asLiveData()
+    val oldest: LiveData<HistoryLogItem?> = pumpSidFlow
+        .flatMapLatest { repo.getOldest(it) }
+        .asLiveData()
+
+    /**
+     * A clean installation creates this ViewModel before pump discovery, when the stored SID is
+     * still -1. Switch every database query atomically once onboarding identifies the pump rather
+     * than leaving the dashboard permanently attached to the empty -1 partition.
+     */
+    fun setPumpSid(pumpSid: Int) {
+        if (pumpSidFlow.value == pumpSid) return
+        Timber.i("HistoryLogViewModel switching pump SID ${pumpSidFlow.value} -> $pumpSid")
+        pumpSidFlow.value = pumpSid
+    }
 
     fun getCountAboveSeqId(minSeqId: Long): LiveData<Long?> {
-        return repo.getCountAboveSeqId(pumpSid, minSeqId).asLiveData()
+        return pumpSidFlow
+            .flatMapLatest { repo.getCountAboveSeqId(it, minSeqId) }
+            .asLiveData()
+    }
+
+    fun getCountInRange(minSeqId: Long, maxSeqId: Long): LiveData<Long?> {
+        return pumpSidFlow
+            .flatMapLatest { repo.getCount(it, minSeqId, maxSeqId) }
+            .asLiveData()
     }
 
     fun latestForType(typeId: Int): LiveData<HistoryLogItem?> {
-        return repo.getLatestForType(pumpSid, typeId).asLiveData()
+        return pumpSidFlow
+            .flatMapLatest { repo.getLatestForType(it, typeId) }
+            .asLiveData()
     }
 
     fun latestItemsForType(typeId: Int, maxItems: Int): LiveData<List<HistoryLogItem>> {
-        return repo.getLatestItemsForType(pumpSid, typeId, maxItems).asLiveData()
+        return pumpSidFlow
+            .flatMapLatest { repo.getLatestItemsForType(it, typeId, maxItems) }
+            .asLiveData()
     }
 
     fun latestItemsForType(typeClass: Class<out HistoryLog>, maxItems: Int): LiveData<List<HistoryLogItem>> {
-        val typeId = LOG_MESSAGE_CLASS_TO_ID[typeClass]
-            ?: return repo.getLatestItemsForTypes(pumpSid, emptyList(), maxItems).asLiveData()
+        val typeId = historyLogTypeId(typeClass)
+            ?: return latestItemsForTypes(emptyArray(), maxItems)
         return latestItemsForType(typeId, maxItems)
     }
 
+    fun allItemsForType(typeClass: Class<out HistoryLog>): LiveData<List<HistoryLogItem>> {
+        val typeId = historyLogTypeId(typeClass)
+            ?: return MutableLiveData(emptyList())
+        return pumpSidFlow
+            .flatMapLatest { repo.allForType(it, typeId) }
+            .asLiveData()
+    }
+
     fun latestItemsForTypes(typeIds: Array<Int>, maxItems: Int): LiveData<List<HistoryLogItem>> {
-        return repo.getLatestItemsForTypes(pumpSid, typeIds.toList(), maxItems).asLiveData()
+        return pumpSidFlow
+            .flatMapLatest { repo.getLatestItemsForTypes(it, typeIds.toList(), maxItems) }
+            .asLiveData()
     }
 
     fun latestItemsForTypes(typeClasses: List<Class<out HistoryLog>>, maxItems: Int): LiveData<List<HistoryLogItem>> {
         return latestItemsForTypes(
-            typeClasses.mapNotNull { LOG_MESSAGE_CLASS_TO_ID[it] }.toTypedArray(),
+            typeClasses.mapNotNull(::historyLogTypeId).toTypedArray(),
             maxItems,
         )
     }
@@ -58,8 +107,28 @@ class HistoryLogViewModel(private val repo: HistoryLogRepo, private val pumpSid:
      * No timezone conversion needed — pump seconds compared to pump seconds.
      */
     fun itemsForTypesSince(typeClasses: List<Class<out HistoryLog>>, minPumpTimeSec: Long): LiveData<List<HistoryLogItem>> {
-        val typeIds = typeClasses.mapNotNull { LOG_MESSAGE_CLASS_TO_ID[it] }
-        return repo.getItemsForTypesSince(pumpSid, typeIds, minPumpTimeSec).asLiveData()
+        val typeIds = typeClasses.mapNotNull(::historyLogTypeId)
+        return pumpSidFlow
+            .flatMapLatest { repo.getItemsForTypesSince(it, typeIds, minPumpTimeSec) }
+            .asLiveData()
+    }
+
+    fun itemsForTypesInTimeRange(
+        typeClasses: List<Class<out HistoryLog>>,
+        minPumpTimeSec: Long,
+        maxPumpTimeSec: Long,
+    ): LiveData<List<HistoryLogItem>> {
+        val typeIds = typeClasses.mapNotNull(::historyLogTypeId)
+        return pumpSidFlow
+            .flatMapLatest {
+                repo.getItemsForTypesInTimeRange(
+                    it,
+                    typeIds,
+                    minPumpTimeSec,
+                    maxPumpTimeSec,
+                )
+            }
+            .asLiveData()
     }
 
     companion object {
@@ -70,9 +139,7 @@ class HistoryLogViewModel(private val repo: HistoryLogRepo, private val pumpSid:
          *   pumpTimeSec ≈ localEpochSec - JANUARY_1_2008_UNIX_EPOCH
          */
         fun estimateCurrentPumpTimeSec(): Long {
-            val offsetSec = java.util.TimeZone.getDefault()
-                .getOffset(System.currentTimeMillis()) / 1000L
-            return Instant.now().epochSecond + offsetSec - Dates.JANUARY_1_2008_UNIX_EPOCH
+            return phoneLocalTimeAsTandemEpochSeconds()
         }
     }
 
@@ -81,6 +148,18 @@ class HistoryLogViewModel(private val repo: HistoryLogRepo, private val pumpSid:
     }
 
 }
+
+/**
+ * PumpX2 defines the two G7 calibration history messages but does not yet include them in its
+ * generic HistoryLogParser registry. Keep the compatibility shim here so MobiControl can query
+ * and decode the audited records without modifying the shared PumpX2 dependency.
+ */
+private fun historyLogTypeId(typeClass: Class<out HistoryLog>): Int? =
+    LOG_MESSAGE_CLASS_TO_ID[typeClass] ?: when (typeClass) {
+        CgmCalibrationG7HistoryLog::class.java -> CGM_CALIBRATION_G7_HISTORY_TYPE_ID
+        CgmBleCalibrationEvtG7HistoryLog::class.java -> CGM_BLE_CALIBRATION_EVENT_G7_HISTORY_TYPE_ID
+        else -> null
+    }
 
 class HistoryLogViewModelFactory(private val repo: HistoryLogRepo, private val pumpSid: Int) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {

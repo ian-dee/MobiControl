@@ -20,6 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.jwoglom.controlx2.presentation.screens.sections.components.NotificationItem
+import com.jwoglom.controlx2.presentation.screens.sections.notificationDismissalTarget
+import com.jwoglom.controlx2.presentation.screens.sections.rememberNotificationDismissalUiState
 import com.jwoglom.controlx2.shared.util.SendType
 import com.jwoglom.pumpx2.pump.messages.Message
 import kotlinx.coroutines.Job
@@ -31,6 +33,11 @@ fun CartridgeNotificationsPanel(
     sendPumpCommands: (SendType, List<Message>) -> Unit,
     refreshNotifications: () -> Job,
 ) {
+    val notificationDismissal = rememberNotificationDismissalUiState(
+        sendPumpCommands = sendPumpCommands,
+        refreshNotifications = refreshNotifications,
+    )
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -74,8 +81,9 @@ fun CartridgeNotificationsPanel(
                     notifications.forEach {
                         NotificationItem(
                             notification = it,
-                            sendPumpCommands = sendPumpCommands,
-                            refresh = refreshNotifications,
+                            dismissalPending =
+                                notificationDismissal.pendingTarget == notificationDismissalTarget(it),
+                            onDismiss = notificationDismissal.onDismiss,
                         )
                     }
                 }

@@ -27,6 +27,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.jwoglom.controlx2.LocalDataStore
 import com.jwoglom.controlx2.db.historylog.HistoryLogViewModel
+import com.jwoglom.controlx2.presentation.theme.porFontWeight
 import com.jwoglom.controlx2.presentation.theme.CardBackground
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
 import com.jwoglom.controlx2.presentation.theme.Elevation
@@ -35,6 +36,8 @@ import com.jwoglom.controlx2.presentation.theme.InsulinColors
 import com.jwoglom.controlx2.presentation.theme.CarbColor
 import com.jwoglom.controlx2.presentation.theme.Spacing
 import com.jwoglom.controlx2.presentation.theme.SurfaceBackground
+import com.jwoglom.controlx2.presentation.theme.SkinPanel
+import com.jwoglom.controlx2.presentation.theme.SkinPanelVariant
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.BolusDeliveryHistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.DexcomG6CGMHistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.DexcomG7CGMHistoryLog
@@ -52,21 +55,23 @@ fun TherapyMetricsCard(
     iob: Float? = null,
     cob: Float? = null,
     timeInRange: Float? = null,
+    compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    Card(
+    SkinPanel(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.Small, vertical = Spacing.Small),
-        colors = CardDefaults.cardColors(containerColor = CardBackground),
-        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.Card),
-        shape = RoundedCornerShape(Spacing.CardCornerRadius)
+        variant = SkinPanelVariant.READOUT,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight()
-                .padding(Spacing.CardPadding),
+                .padding(
+                    horizontal = if (compact) Spacing.Small else Spacing.CardPadding,
+                    vertical = if (compact) Spacing.ExtraSmall else Spacing.CardPadding,
+                ),
             verticalArrangement = Arrangement.Center
         ) {
             Row(
@@ -76,7 +81,8 @@ fun TherapyMetricsCard(
                 MetricDisplay(
                     label = "IOB",
                     value = iob?.let { "%.2f U".format(it) } ?: "--",
-                    color = InsulinColors.Bolus
+                    color = InsulinColors.Bolus,
+                    compact = compact,
                 )
 
                 if (cob != null) {
@@ -104,6 +110,7 @@ private fun MetricDisplay(
     label: String,
     value: String,
     color: Color,
+    compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -114,10 +121,10 @@ private fun MetricDisplay(
             text = value,
             style = MaterialTheme.typography.headlineLarge,
             color = color,
-            fontWeight = FontWeight.Bold
+            fontWeight = porFontWeight(FontWeight.Bold)
         )
 
-        Spacer(Modifier.height(Spacing.ExtraSmall))
+        Spacer(Modifier.height(if (compact) 0.dp else Spacing.ExtraSmall))
 
         Text(
             text = label,
@@ -137,6 +144,7 @@ fun TherapyMetricsCardFromDataStore(
     historyLogViewModel: HistoryLogViewModel? = null,
     showCOB: Boolean = false,
     showTIR: Boolean = false,
+    compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val ds = LocalDataStore.current
@@ -207,6 +215,7 @@ fun TherapyMetricsCardFromDataStore(
         iob = iob?.toFloat(),
         cob = null,
         timeInRange = null,
+        compact = compact,
         modifier = modifier
     )
 }

@@ -5,6 +5,9 @@ import androidx.room.Entity
 import androidx.room.Ignore
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.HistoryLog
 import com.jwoglom.pumpx2.pump.messages.response.historyLog.HistoryLogParser
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.AlertAckHistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.CgmBleCalibrationEvtG7HistoryLog
+import com.jwoglom.pumpx2.pump.messages.response.historyLog.CgmCalibrationG7HistoryLog
 import com.jwoglom.pumpx2.pump.messages.helpers.Dates
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -57,7 +60,15 @@ class HistoryLogItem(
             return it
         }
         val cachedObj = try {
-            val historyLogClass = HistoryLogParser.LOG_MESSAGE_IDS[typeId]
+            val historyLogClass = if (typeId == ALERT_ACK_HISTORY_TYPE_ID) {
+                AlertAckHistoryLog::class.java
+            } else if (typeId == CGM_CALIBRATION_G7_HISTORY_TYPE_ID) {
+                CgmCalibrationG7HistoryLog::class.java
+            } else if (typeId == CGM_BLE_CALIBRATION_EVENT_G7_HISTORY_TYPE_ID) {
+                CgmBleCalibrationEvtG7HistoryLog::class.java
+            } else {
+                HistoryLogParser.LOG_MESSAGE_IDS[typeId]
+            }
             if (historyLogClass != null) {
                 val historyLog = historyLogClass.getDeclaredConstructor().newInstance()
                 historyLog.parse(cargo)
@@ -72,3 +83,7 @@ class HistoryLogItem(
         return cachedObj
     }
 }
+
+private const val ALERT_ACK_HISTORY_TYPE_ID = 27
+internal const val CGM_CALIBRATION_G7_HISTORY_TYPE_ID = 438
+internal const val CGM_BLE_CALIBRATION_EVENT_G7_HISTORY_TYPE_ID = 439

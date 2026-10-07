@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.jwoglom.controlx2.LocalDataStore
+import com.jwoglom.controlx2.presentation.theme.porFontWeight
 import com.jwoglom.controlx2.presentation.theme.CardBackground
 import com.jwoglom.controlx2.presentation.theme.ControlX2Theme
 import com.jwoglom.controlx2.presentation.theme.Elevation
@@ -36,6 +37,7 @@ import com.jwoglom.controlx2.presentation.theme.Spacing
 import com.jwoglom.controlx2.presentation.theme.SurfaceBackground
 import com.jwoglom.controlx2.shared.enums.CGMSessionState
 import com.jwoglom.controlx2.shared.icons.filled.SensorAlert
+import com.jwoglom.controlx2.presentation.theme.SkinPanel
 
 /**
  * Sensor Info Card displaying CGM sensor expiration and transmitter battery.
@@ -47,13 +49,10 @@ fun SensorInfoCard(
     transmitterBattery: String? = null,
     modifier: Modifier = Modifier
 ) {
-    Card(
+    SkinPanel(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.Small, vertical = Spacing.Small),
-        colors = CardDefaults.cardColors(containerColor = CardBackground),
-        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.Card),
-        shape = RoundedCornerShape(Spacing.CardCornerRadius)
     ) {
         Column(
             modifier = Modifier
@@ -132,7 +131,7 @@ private fun SensorItem(
                 Text(
                     text = value,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = porFontWeight(FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }

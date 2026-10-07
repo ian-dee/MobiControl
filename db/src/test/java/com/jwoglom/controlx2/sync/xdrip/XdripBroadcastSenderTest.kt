@@ -12,14 +12,10 @@ class XdripBroadcastSenderTest {
     @Test
     fun sendSgv_suppressesDuplicatePayloads() {
         val sent = mutableListOf<Triple<String, String, String>>()
-        var now = 1000L
-        val sender = XdripBroadcastSender(
-            sendBroadcastFn = { action, extra, payload -> sent.add(Triple(action, extra, payload)) },
-            nowMillisFn = { now }
-        )
+        val sender = sender(sent)
 
-        assertTrue(sender.sendSgv("[{\"sgv\":100}]"))
-        assertFalse(sender.sendSgv("[{\"sgv\":100}]"))
+        assertTrue(sender.sendSgv("[{\"mgdl\":100}]"))
+        assertFalse(sender.sendSgv("[{\"mgdl\":100}]"))
 
         assertEquals(1, sent.size)
         assertEquals(XdripBroadcastSender.ACTION_NEW_SGV, sent[0].first)
@@ -29,16 +25,19 @@ class XdripBroadcastSenderTest {
     @Test
     fun sendDeviceStatus_obeysMinimumInterval() {
         val sent = mutableListOf<Triple<String, String, String>>()
-        var now = 1000L
+        var now = 1_000L
         val sender = XdripBroadcastSender(
-            sendBroadcastFn = { action, extra, payload -> sent.add(Triple(action, extra, payload)) },
-            nowMillisFn = { now }
+            sendBroadcastFn = { action, extra, payload ->
+                sent += Triple(action, extra, payload)
+                true
+            },
+            nowMillisFn = { now },
         )
 
         assertTrue(sender.sendDeviceStatus("{\"a\":1}", minimumIntervalSeconds = 5))
-        now = 3000L
+        now = 3_000L
         assertFalse(sender.sendDeviceStatus("{\"a\":2}", minimumIntervalSeconds = 5))
-        now = 7000L
+        now = 7_000L
         assertTrue(sender.sendDeviceStatus("{\"a\":2}", minimumIntervalSeconds = 5))
 
         assertEquals(2, sent.size)
@@ -47,32 +46,57 @@ class XdripBroadcastSenderTest {
     }
 
     @Test
-    fun sendTreatments_sendsNewFoodWhenEnabled() {
+    fun sendTreatment_emitsExactlyOneTreatmentAction() {
         val sent = mutableListOf<Triple<String, String, String>>()
-        val sender = XdripBroadcastSender(
-            sendBroadcastFn = { action, extra, payload -> sent.add(Triple(action, extra, payload)) }
-        )
+        val sender = sender(sent)
 
-        assertTrue(sender.sendTreatments("[{\"eventType\":\"Bolus\"}]", alsoSendNewFood = true))
+        assertTrue(sender.sendTreatments("[{\"eventType\":\"Bolus\"}]"))
 
-        assertEquals(2, sent.size)
-        assertEquals(XdripBroadcastSender.ACTION_NEW_TREATMENT, sent[0].first)
-        assertEquals(XdripBroadcastSender.ACTION_NEW_FOOD, sent[1].first)
-        assertEquals(XdripTreatmentPayload.EXTRA_KEY, sent[0].second)
-        assertEquals(XdripTreatmentPayload.EXTRA_KEY, sent[1].second)
+        assertEquals(1, sent.size)
+        assertEquals(XdripBroadcastSender.ACTION_NEW_TREATMENT, sent.single().first)
+        assertEquals(XdripTreatmentPayload.EXTRA_KEY, sent.single().second)
     }
 
     @Test
-    fun sendTreatments_doesNotSendNewFoodWhenDisabled() {
+    fun unavailableReceiverIsNotCachedAsSent() {
+        var receiverAvailable = false
         val sent = mutableListOf<Triple<String, String, String>>()
         val sender = XdripBroadcastSender(
-            sendBroadcastFn = { action, extra, payload -> sent.add(Triple(action, extra, payload)) }
+            sendBroadcastFn = { action, extra, payload ->
+                if (receiverAvailable) sent += Triple(action, extra, payload)
+                receiverAvailable
+            },
         )
 
-        assertTrue(sender.sendTreatments("[{\"eventType\":\"Bolus\"}]", alsoSendNewFood = false))
-
+        assertFalse(sender.sendSgv("[{\"mgdl\":100}]"))
+        receiverAvailable = true
+        assertTrue(sender.sendSgv("[{\"mgdl\":100}]"))
         assertEquals(1, sent.size)
-        assertEquals(XdripBroadcastSender.ACTION_NEW_TREATMENT, sent[0].first)
-        assertEquals(XdripTreatmentPayload.EXTRA_KEY, sent[0].second)
     }
+
+    @Test
+    fun broadcastExceptionIsContainedAndPayloadCanRetry() {
+        var shouldThrow = true
+        var successfulSends = 0
+        val sender = XdripBroadcastSender(
+            sendBroadcastFn = { _, _, _ ->
+                if (shouldThrow) error("receiver rejected broadcast")
+                successfulSends += 1
+                true
+            },
+        )
+
+        assertFalse(sender.sendSgv("[{\"mgdl\":100}]"))
+        shouldThrow = false
+        assertTrue(sender.sendSgv("[{\"mgdl\":100}]"))
+        assertEquals(1, successfulSends)
+    }
+
+    private fun sender(sent: MutableList<Triple<String, String, String>>) =
+        XdripBroadcastSender(
+            sendBroadcastFn = { action, extra, payload ->
+                sent += Triple(action, extra, payload)
+                true
+            },
+        )
 }

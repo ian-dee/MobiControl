@@ -20,7 +20,7 @@ android {
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.jwoglom.controlx2"
+        applicationId "local.controlx21"
         minSdk 30
         targetSdk 33
         versionCode 1
@@ -65,7 +65,7 @@ android {
                 } else {
                     include '**/snapshots/**'
                 }
-                if (System.getenv('CI') == 'true') {
+                if (System.getProperty('robolectric.offline') == 'true') {
                     systemProperty 'robolectric.offline', 'true'
                     systemProperty 'robolectric.dependency.dir', "${System.getProperty('user.home')}/.robolectric"
                 }

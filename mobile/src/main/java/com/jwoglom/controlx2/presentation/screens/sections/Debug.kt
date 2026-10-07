@@ -228,7 +228,7 @@ fun Debug(
             if (Prefs(context).serviceEnabled()) {
                 item {
                     ListItem(
-                        headlineContent = { Text("Disable ControlX2 service") },
+                        headlineContent = { Text("Disable MobiControl service") },
                         supportingContent = { Text("Stops the background service and disables it from starting automatically when the app is opened.") },
                         leadingContent = {
                             Icon(
@@ -481,7 +481,7 @@ fun Debug(
                                             FilledTonalButton(
                                                 onClick = {
                                                     debugMessageCache.value?.let {
-                                                        shareTextContents(messageCacheToJson(it), "ControlX2 JSON debug data","text/json")
+                                                        shareTextContents(messageCacheToJson(it), "MobiControl JSON debug data","text/json")
                                                     }
                                                 }
                                             ) {
@@ -513,7 +513,7 @@ fun Debug(
                                                 Text("${message.second} (${shortTimeAgo(message.second, nowThresholdSeconds = 1)})")
                                             },
                                             modifier = Modifier.clickable {
-                                                shareTextContents(messagePairToJson(message), "ControlX2 ${shortPumpMessageTitle(message.first)} debug data","text/json")
+                                                shareTextContents(messagePairToJson(message), "MobiControl ${shortPumpMessageTitle(message.first)} debug data","text/json")
                                             }
                                         )
                                     }
@@ -635,7 +635,7 @@ fun Debug(
                                             FilledTonalButton(
                                                 onClick = {
                                                     historyLogCache.value?.let {
-                                                        shareTextContents(historyLogCacheToJson(it), "ControlX2 History Log JSON data","text/json")
+                                                        shareTextContents(historyLogCacheToJson(it), "MobiControl History Log JSON data","text/json")
                                                     }
                                                 }
                                             ) {
@@ -745,7 +745,7 @@ fun Debug(
                                                 Text("#${log.key} ${log.value.pumpTimeSecInstant}")
                                             },
                                             modifier = Modifier.clickable {
-                                                shareTextContents(historyLogToJson(log), "ControlX2 History Log Event","text/json")
+                                                shareTextContents(historyLogToJson(log), "MobiControl History Log Event","text/json")
                                             }
                                         )
                                     }

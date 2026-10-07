@@ -12,8 +12,7 @@ interface XdripBroadcaster {
     fun sendDeviceStatus(deviceStatusJsonString: String, minimumIntervalSeconds: Int? = null): Boolean
     fun sendTreatments(
         treatmentsJsonString: String,
-        minimumIntervalSeconds: Int? = null,
-        alsoSendNewFood: Boolean = true
+        minimumIntervalSeconds: Int? = null
     ): Boolean
 
     fun sendExternalStatusline(statusline: String, minimumIntervalSeconds: Int? = null): Boolean
@@ -23,16 +22,23 @@ interface XdripBroadcaster {
  * Sends xDrip-compatible broadcast intents for glucose, treatments, and status updates.
  */
 class XdripBroadcastSender(
-    private val sendBroadcastFn: (action: String, extraKey: String, payload: String) -> Unit,
+    private val sendBroadcastFn: (action: String, extraKey: String, payload: String) -> Boolean,
     private val nowMillisFn: () -> Long = { System.currentTimeMillis() }
 ) : XdripBroadcaster {
     constructor(context: Context) : this(
         sendBroadcastFn = { action, extraKey, payload ->
             val intent = Intent(action).apply {
-                `package` = "com.eveningoutpost.dexdrip"
+                `package` = XDRIP_PACKAGE
+                addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
                 putExtra(extraKey, payload)
             }
-            context.sendBroadcast(intent)
+            if (!XdripReceiverInspector(context).hasReceiver(action)) {
+                Timber.w("xDrip broadcast skipped: no receiver for action=%s", action)
+                false
+            } else {
+                context.sendBroadcast(intent)
+                true
+            }
         }
     )
 
@@ -40,8 +46,8 @@ class XdripBroadcastSender(
         const val ACTION_NEW_SGV = "info.nightscout.client.NEW_SGV"
         const val ACTION_NEW_DEVICE_STATUS = "info.nightscout.client.NEW_DEVICESTATUS"
         const val ACTION_NEW_TREATMENT = "info.nightscout.client.NEW_TREATMENT"
-        const val ACTION_NEW_FOOD = "info.nightscout.client.NEW_FOOD"
         const val ACTION_EXTERNAL_STATUSLINE = "com.eveningoutpost.dexdrip.ExternalStatusline"
+        const val XDRIP_PACKAGE = "com.eveningoutpost.dexdrip"
 
         private const val EXTRA_SGVS = XdripSgvPayload.EXTRA_KEY
         private const val EXTRA_DEVICESTATUS = XdripDeviceStatusPayload.EXTRA_KEY
@@ -78,22 +84,15 @@ class XdripBroadcastSender(
 
     override fun sendTreatments(
         treatmentsJsonString: String,
-        minimumIntervalSeconds: Int?,
-        alsoSendNewFood: Boolean
+        minimumIntervalSeconds: Int?
     ): Boolean {
-        val sentTreatment = sendWithCache(
+        return sendWithCache(
             cacheKey = "treatments",
             action = ACTION_NEW_TREATMENT,
             extraKey = EXTRA_TREATMENTS,
             payload = treatmentsJsonString,
             minimumIntervalSeconds = minimumIntervalSeconds
         )
-
-        if (alsoSendNewFood && sentTreatment) {
-            sendBroadcast(ACTION_NEW_FOOD, EXTRA_TREATMENTS, treatmentsJsonString)
-        }
-
-        return sentTreatment
     }
 
     override fun sendExternalStatusline(statusline: String, minimumIntervalSeconds: Int?): Boolean {
@@ -127,13 +126,21 @@ class XdripBroadcastSender(
             return false
         }
 
-        sendBroadcast(action, extraKey, payload)
+        if (!sendBroadcast(action, extraKey, payload)) return false
         cache[cacheKey] = LastSentState(payload = payload, sentAtMillis = now)
         return true
     }
 
-    private fun sendBroadcast(action: String, extraKey: String, payload: String) {
-        sendBroadcastFn(action, extraKey, payload)
-        Timber.i("Sent xDrip broadcast action=%s extra=%s", action, extraKey)
+    private fun sendBroadcast(action: String, extraKey: String, payload: String): Boolean {
+        val emitted = runCatching {
+            sendBroadcastFn(action, extraKey, payload)
+        }.getOrElse { error ->
+            Timber.e(error, "xDrip broadcast failed action=%s extra=%s", action, extraKey)
+            false
+        }
+        if (emitted) {
+            Timber.i("Emitted xDrip broadcast action=%s extra=%s", action, extraKey)
+        }
+        return emitted
     }
 }
